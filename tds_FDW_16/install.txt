@@ -1,0 +1,4 @@
+Install directory: C:\Program Files\PostgreSQL\16\share\extension
+Copy sybdb.dll, libcrypto-3-x64.dll, and libssl-3-x64.dll C:\Program Files\PostgreSQL\16\bin
+The reason is the freetds build is dynamically linked to sybdb.dll and linked to OpenSSL.
+Change path inside tds_fdw.control if necessary.

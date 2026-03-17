@@ -1,0 +1,14 @@
+[general]
+name=ifcSQL Tools
+qgisMinimumVersion=3.0
+author=Michele Berlato
+version=1.0
+description=Plugin to interact with the IFC data 
+	stored in the ifcSQL database system.
+about= This plugin allows you to:
+	- Upload IFC files to the database system;
+	- View IFC files on the map;
+	- Delete IFC files uploaded to the database system;
+	- Filter IFC elements using queries.
+icon=Icons/icon.png
+tags= IFC, BIM, ifcSQL 
