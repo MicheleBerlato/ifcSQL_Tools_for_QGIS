@@ -9,20 +9,35 @@ echo.
 echo Format example: PC-NAME\SQLEXPRESS
 echo.
 
-REM Prompt the user for the SQL Server name
+:InputLoop
+REM Azzeriamo la variabile in caso di ripetizione del ciclo
+set "UserServerInput="
 set /p UserServerInput="Enter your SQL Server name: "
 
 REM Security check if the user leaves it blank
 if "%UserServerInput%"=="" (
     echo.
-    echo ERROR: No server name entered. The installation will be aborted.
-    pause
-    exit /b
+    echo [ERROR] No server name entered. Please try again.
+    echo.
+    goto :InputLoop
 )
 
 REM Inject the "-C" flag to bypass the ODBC Driver 18 SSL Certificate error
-set SqlServer=%UserServerInput% -C
+set "SqlServer=%UserServerInput% -C"
 
+echo.
+echo [INFO] Testing connection to '%UserServerInput%'...
+REM Esegue un test di connessione con timeout di 5 secondi (-l 5) per evitare blocchi
+sqlcmd -S "%UserServerInput%" -C -E -Q "SELECT 1" -b -l 5 >nul 2>&1
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Connection failed! 
+    echo Please check if the server name is correct and the SQL Server service is running.
+    echo.
+    goto :InputLoop
+)
+
+echo [SUCCESS] Connected successfully to the SQL Server!
 echo.
 echo ===================================================
 echo Server set to: %UserServerInput%

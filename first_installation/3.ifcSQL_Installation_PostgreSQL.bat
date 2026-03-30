@@ -86,10 +86,25 @@ net start postgresql-x64-16 >nul 2>&1
 echo [SUCCESS] FDW files deployed successfully!
 echo.
 
+:PgCredsLoop
 :: --- 3. REQUEST CREDENTIALS FOR DB CREATION ---
-echo --- Database Creation ---
+echo --- PostgreSQL Authentication ---
+set "PGUSER="
+set "PGPASSWORD="
 set /p PGUSER="Enter PostgreSQL username (e.g., postgres): "
 set /p PGPASSWORD="Enter password for user %PGUSER%: "
+
+echo [INFO] Testing PostgreSQL connection...
+"%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d postgres -tAc "SELECT 1;" >nul 2>&1
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [ERROR] Connection failed! Invalid username, password, or service not running.
+    echo Please try again.
+    echo.
+    goto :PgCredsLoop
+)
+echo [SUCCESS] Connected successfully to PostgreSQL!
 echo.
 
 :: --- 4. SMART DATABASE CREATION ---
@@ -103,9 +118,18 @@ if %ERRORLEVEL% NEQ 0 goto :CreateDB
 
 echo [INFO] The database '%TARGET_DB%' already exists.
 set /p CREATE_NEW="Do you want to create a new numbered database? (Y/N): "
-if /I NOT "%CREATE_NEW%"=="Y" (
-    echo [INFO] Skipping creation. Proceeding with existing '%TARGET_DB%'.
+if /I "%CREATE_NEW%"=="Y" goto :FindNextAvailable
+
+:: Se l'utente dice NO alla creazione di un nuovo DB:
+echo.
+echo [INFO] Skipping database creation.
+set /p MODIFY_FDW="Do you want to modify the FDW connection parameters with MSSQL? (Y/N): "
+if /I "%MODIFY_FDW%"=="Y" (
+    echo [INFO] Proceeding to update FDW parameters on existing '%TARGET_DB%'...
     goto :ExtensionsSetup
+) else (
+    echo [INFO] Exiting setup.
+    goto :EndScript
 )
 
 :FindNextAvailable
@@ -135,19 +159,29 @@ echo Installing tds_fdw and postgis on '%TARGET_DB%'...
 "%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "CREATE EXTENSION IF NOT EXISTS tds_fdw;"
 "%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 
+:FdwSetupLoop
 :: --- 6. FDW CONFIGURATION (MSSQL) ---
 echo.
 echo --- MSSQL Foreign Data Wrapper Setup ---
-set /p MSSQL_SERVER="Enter MSSQL Server Name (e.g., NB-8988): "
+:: Azzeriamo le variabili ad ogni ciclo per evitare bug nei ritentativi
+set "MSSQL_SERVER="
+set "MSSQL_PORT="
+set "MSSQL_USER="
+set "MSSQL_PASS="
+
+set /p MSSQL_SERVER="Enter MSSQL Server Name without SQLEXPRESS (e.g., NB-8988): "
 set /p MSSQL_PORT="Enter MSSQL Port [Press Enter for 1433]: "
 if "%MSSQL_PORT%"=="" set "MSSQL_PORT=1433"
-set /p MSSQL_USER="Enter MSSQL Username (e.g., user_MSSQL): "
+set /p MSSQL_USER="Enter MSSQL Username (e.g., mssql_user): "
 set /p MSSQL_PASS="Enter MSSQL Password: "
 
 echo.
-echo Configuring FDW Server 'mssql_server' and User Mapping...
-"%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "CREATE SERVER IF NOT EXISTS mssql_ifcsql FOREIGN DATA WRAPPER tds_fdw OPTIONS (servername '%MSSQL_SERVER%', port '%MSSQL_PORT%', database 'ifcSQL');"
-"%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "CREATE USER MAPPING IF NOT EXISTS FOR \"%PGUSER%\" SERVER mssql_ifcsql OPTIONS (username '%MSSQL_USER%', password '%MSSQL_PASS%');"
+echo Configuring FDW Server 'mssql_ifcsql' and User Mapping...
+:: Eliminiamo a cascata il server precedente (se stiamo riprovando) per azzerare le dipendenze errate
+"%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "DROP SERVER IF EXISTS mssql_ifcsql CASCADE;" >nul 2>&1
+
+"%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "CREATE SERVER mssql_ifcsql FOREIGN DATA WRAPPER tds_fdw OPTIONS (servername '%MSSQL_SERVER%', port '%MSSQL_PORT%', database 'ifcSQL');"
+"%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "CREATE USER MAPPING FOR \"%PGUSER%\" SERVER mssql_ifcsql OPTIONS (username '%MSSQL_USER%', password '%MSSQL_PASS%');"
 
 :: --- 7. SCHEMA CREATION AND TABLE IMPORT ---
 echo.
@@ -186,13 +220,22 @@ echo.
 echo --- Connection Test ---
 echo Attempting to read the first 5 rows from 'ifcinstance.entity'...
 "%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "SELECT * FROM ifcinstance.entity LIMIT 5;"
-if %ERRORLEVEL% EQU 0 (
-    echo.
-    echo [SUCCESS] Everything is working perfectly! Connection to MSSQL established.
-) else (
-    echo.
-    echo [ERROR] Could not read from MSSQL. Check if the MSSQL server is reachable and credentials are correct.
-)
+
+if %ERRORLEVEL% EQU 0 goto :TestSuccess
+goto :TestFail
+
+:TestSuccess
+echo.
+echo [SUCCESS] Everything is working perfectly! Connection to MSSQL established.
+goto :EndScript
+
+:TestFail
+echo.
+echo [ERROR] Could not read from MSSQL. Check if the MSSQL server is reachable and credentials are correct (server name; port; username; password).
+echo.
+set /p RETRY_FDW="Do you want to re-enter the MSSQL credentials and try again? (Y/N): "
+if /I "%RETRY_FDW%"=="Y" goto :FdwSetupLoop
+goto :EndScript
 
 :EndScript
 :: Clear passwords from memory
