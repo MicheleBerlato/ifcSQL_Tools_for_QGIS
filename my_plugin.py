@@ -15,6 +15,8 @@ from math import atan2, cos, sin
 import threading
 import sys          
 import importlib
+import zipfile
+import site
 
 
 
@@ -1690,11 +1692,6 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         Controlla le librerie necessarie. Se mancano, chiede all'utente 
         il permesso di installarle automaticamente tramite pip.
         """
-        import sys
-        import importlib
-        import subprocess
-        import os
-        import site # Fondamentale per trovare la cartella "--user"
 
         dependencies = {
             'ifcopenshell': 'ifcopenshell',
@@ -1814,9 +1811,36 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         # Ottiene la cartella dove risiede questo file python (la root del plugin)
         plugin_dir = os.path.dirname(__file__) 
 
+
         # 2. Percorso relativo per IfcConvert
-        # Cerca il file dentro: CartellaPlugin/IfcConvert/IfcConvert.exe
-        ifcconvert_path = os.path.join(plugin_dir, "IfcConvert", "IfcConvert.exe")
+        ifcconvert_dir = os.path.join(plugin_dir, "IfcConvert")
+        ifcconvert_path = os.path.join(ifcconvert_dir, "IfcConvert.exe")
+
+        # Se l'eseguibile non esiste, cerchiamo se c'è uno zip da estrarre
+        if not os.path.exists(ifcconvert_path):
+            if os.path.exists(ifcconvert_dir):
+                # Cerca tutti i file .zip nella cartella IfcConvert
+                zip_files = [f for f in os.listdir(ifcconvert_dir) if f.lower().endswith('.zip')]
+                
+                if zip_files:
+                    zip_path = os.path.join(ifcconvert_dir, zip_files[0]) # Prende il primo zip trovato
+                    
+                    # Log per l'utente (opzionale: puoi anche mostrare un QMessageBox temporaneo)
+                    self.log_info(("IfcConvert.exe non trovato. Estrazione di {zip_file} in corso..."))
+                    
+                    try:
+                        # Estrae il contenuto dello zip nella stessa cartella
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(ifcconvert_dir)
+                        self.log_info(("Estrazione completata con successo."))
+                    except Exception as e:
+                        QMessageBox.critical(
+                            self, 
+                            self.tr("Errore Estrazione"), 
+                            self.tr("Impossibile estrarre il file zip di IfcConvert:\n{e}\n\nEstrai il file manualmente.").format(e=str(e))
+                        )
+                        return
+
 
         # Controllo esistenza IfcConvert
         if not os.path.exists(ifcconvert_path):
@@ -3292,13 +3316,13 @@ class QueryDialog(Ui_Query, QDockWidget):
             cur = conn.cursor()
             
             # Costruzione sicura della query. 
-            query = f'SELECT DISTINCT nome FROM territory."{selected_table}" ORDER BY nome;'
+            query = f'SELECT DISTINCT "name" FROM territory."{selected_table}" ORDER BY "name";'
             
             cur.execute(query)
             rows = cur.fetchall()
             
             for row in rows:
-                # row[0] è il valore della colonna 'nome'
+                # row[0] è il valore della colonna 'name'
                 if row[0] is not None:
                     self.comboBox_SelezionaArea.addItem(str(row[0]))
     
@@ -3308,8 +3332,8 @@ class QueryDialog(Ui_Query, QDockWidget):
             cur.close()
             conn.close()
         except psycopg2.Error as e:
-            # Questo gestisce il caso in cui la colonna "nome" non esista
-            self.iface.messageBar().pushMessage(self.tr("Errore SQL"), self.tr("La tabella '{table}' non ha una colonna 'nome' o errore query.").format(table=selected_table), level=2)
+            # Questo gestisce il caso in cui la colonna "name" non esista
+            self.iface.messageBar().pushMessage(self.tr("Errore SQL"), self.tr("La tabella '{table}' non ha una colonna 'name' o errore query.").format(table=selected_table), level=2)
         except Exception as e:
             print(self.tr("Errore generico popolamento aree: {e}").format(e=str(e)))
 
@@ -3678,7 +3702,7 @@ class QueryDialog(Ui_Query, QDockWidget):
                             SELECT DISTINCT g."IfcClass"
                             FROM "ifcgeometry"."entitygeometry" g
                             JOIN "territory"."{selected_table}" t 
-                            ON t.nome IN ({areas_formatted})
+                            ON t."name" IN ({areas_formatted})
                             WHERE ST_Within(g."Geometry", t.geom)
                             ORDER BY g."IfcClass";
                         """
@@ -3841,14 +3865,14 @@ class QueryDialog(Ui_Query, QDockWidget):
                     QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Filtro Contesto attivo: Seleziona un'area geografica."))
                     return
 
-                # Aggiungiamo il nome del territorio alla select (come originale)
-                select_part.append("t.nome as territorio_nome")
-                # Aggiungiamo la tabella territorio (come originale)
+                # Aggiungiamo il name del territorio alla select 
+                select_part.append('t."name" as territory_name')
+                # Aggiungiamo la tabella territorio 
                 from_part.append(f'JOIN "territory"."{selected_table}" t ON ST_Within(g."Geometry", t.geom)')
                 
                 # Filtro WHERE sui nomi delle aree
                 areas_sql = ", ".join([f"'{a.replace('\'', '\'\'')}'" for a in selected_areas])
-                where_conditions.append(f"t.nome IN ({areas_sql})")
+                where_conditions.append(f't."name" IN ({areas_sql})')
 
             # CASO B: Filtro Manuale ---
             elif current_page_idx == 1:
