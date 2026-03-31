@@ -810,7 +810,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         """
         # 1. Determina percorsi
         plugin_dir = os.path.dirname(__file__)
-        exe_folder = os.path.join(plugin_dir, "IfcSQL Script")
+        exe_folder = os.path.join(plugin_dir, "IfcSQL_scripts")
         
         exe_name = ""
         if schema_version == "IFC4":
