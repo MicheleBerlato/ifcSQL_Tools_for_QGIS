@@ -5,7 +5,10 @@ This repository contains the code for the ifcSQL_Tools QGIS plugin that allows y
 
 # How to use it?
 
-- Donwload the zip file
+- Download the zip file
+![Screenshot ZIP download](github_images/ZIP download.png)
+
+
 - Install the plugin from ZIP on QGIS
 - Open the folder and open first_installation
 - Follow the step starting from the first pdf
