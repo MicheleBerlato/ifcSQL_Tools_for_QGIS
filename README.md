@@ -2,7 +2,7 @@
 This repository contains the code for the ifcSQL_Tools QGIS plugin that allows you to interact with (load, view, filter, and delete) IFC data stored in the ifcSQL database system.
 
 
-# How to use it?
+# How to install the plugin?
 
 (1) Download the ZIP file.
 <br><br> ![Screenshot ZIP download](github_images/01_ZIP_download.png) <br><br>
@@ -12,4 +12,7 @@ This repository contains the code for the ifcSQL_Tools QGIS plugin that allows y
 
 (3) Open the plugin folder, then open the “first_installation” folder and follow the instructions starting with the first PDF file: 0.Start with ifcSQL_Tools.
 <br><br> ![GIF plugin folder](github_images/04_open_plugin_folder.gif) <br><br>
+
+
+# How to use the plugin?
 
