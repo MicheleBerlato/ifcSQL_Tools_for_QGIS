@@ -12,6 +12,6 @@ This repository contains the code for the ifcSQL_Tools QGIS plugin that allows y
 <br><br> ![Screenshot install plugin from ZIP](github_images/02_Install_from_ZIP.png) <br><br>
 
 - Open the plugin folder and open first_installation folder
-
+<br><br> ![GIF plugin folder](github_images/04_open_plugin_folder.gif) <br><br>
 
 - Follow the step starting from the first pdf: 0_start_with_ifcSQL_Tools
