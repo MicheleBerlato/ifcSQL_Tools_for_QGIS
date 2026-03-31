@@ -53,13 +53,13 @@ set "BASE_DIR=%~dp0"
 
 REM 1. Navigate to the Create folder and run the script
 echo --- PHASE 1: Database Creation ---
-cd /d "%BASE_DIR%..\IfcSQL Script\IfcSQL-main\1_ifcSQL_Create"
+cd /d "%BASE_DIR%..\IfcSQL_scripts\IfcSQL-main\1_ifcSQL_Create"
 call ifcSQL_Create.bat
 
 echo.
 REM 2. Navigate to the Fill folder and run the script
 echo --- PHASE 2: Database Population ---
-cd /d "%BASE_DIR%..\IfcSQL Script\IfcSQL-main\2_ifcSQL_Fill"
+cd /d "%BASE_DIR%..\IfcSQL_scripts\IfcSQL-main\2_ifcSQL_Fill"
 call ifcSQL_Fill.bat
 
 echo.

@@ -193,7 +193,7 @@ echo Creating schemas: ifcinstance, ifcgeometry, territory...
 "%PG_BIN_PATH%\psql.exe" -U "%PGUSER%" -d "%TARGET_DB%" -c "CREATE SCHEMA IF NOT EXISTS territory;"
 
 :: Define the folder path containing the SQL scripts
-set "SQL_FOLDER_PATH=%~dp0..\IfcSQL Script\IfcSQL-PostgreSQL"
+set "SQL_FOLDER_PATH=%~dp0..\IfcSQL_scripts\IfcSQL-PostgreSQL"
 
 if exist "%SQL_FOLDER_PATH%\*.sql" (
     echo.
