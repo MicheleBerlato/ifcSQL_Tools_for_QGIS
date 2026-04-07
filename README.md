@@ -23,22 +23,23 @@ You can upload all your georeferenced IFC files to the ifcSQL database and view 
 <br><br> ![GIF plugin folder](github_images/05.1_Connect_mssql.png) <br><br>
 <br><br> ![GIF plugin folder](github_images/05.1_Connect_postgres.png) <br><br>
 
+
 (1) You can import an IFC file using the “Import IFC file” button. Remember that you must import the file first into MSSQL and then into PostgreSQL for the process to be complete. The steps to follow (for both databases) are:
 - Select an existing connection or create a new one.
 - Connect to the selected database.
 - Select the IFC file you want to import (for import into PostgreSQL, the plugin will suggest the last file imported into MSSQL).
 - Import the IFC file.
-
 <br><br> ![GIF plugin folder](github_images/06_ImportIFCfileMSSQL.png) <br><br>
 <br><br> ![GIF plugin folder](github_images/07_ImportIFCfilePostgreSQL.png) <br><br>
+
 
 (2) You can delete an IFC file using the “Delete IFC file” button. The file will be deleted from both databases or only from MSSQL if it has not been imported into PostgreSQL. The steps to follow are:
 - Select the existing connections (both databases).
 - Connect to the selected databases.
 - Select the IFC file you want to delete (it will indicate whether the file is present only in MSSQL or in both databases).
 - Delete the IFC file.
-
 <br><br> ![GIF plugin folder](github_images/08_DeleteIFCfile.png) <br><br>
+
 
 (3)You can query IFC geometries using the “IFC Query” button. You can filter the IFC geometries in your database by following these steps:
 - Select an existing connection.
@@ -47,8 +48,4 @@ You can upload all your georeferenced IFC files to the ifcSQL database and view 
 - In the context filter, you can use three types of filters: “default filter” if you have areas loaded in your database; “manual filter” if you want to draw the area; “project filter” if you want to filter by a specific IFC file.
 - In the IFC filter, you can select which IFC class or classes to filter by.
 - Apply filter.
-
 <br><br> ![GIF plugin folder](github_images/09_IFCquery.png) <br><br>
-
-
-
