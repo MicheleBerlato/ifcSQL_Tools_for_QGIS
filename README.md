@@ -29,6 +29,8 @@ You can upload all your georeferenced IFC files to the ifcSQL database and view 
 - Connect to the selected database.
 - Select the IFC file you want to import (for import into PostgreSQL, the plugin will suggest the last file imported into MSSQL).
 - Import the IFC file.
+
+It is recommended to split larger models into multiple IFC files to speed up the loading process, which might otherwise be very slow.
 <br><br> ![GIF plugin folder](github_images/06_ImportIFCfileMSSQL.png) <br><br>
 <br><br> ![GIF plugin folder](github_images/07_ImportIFCfilePostgreSQL.png) <br><br>
 
