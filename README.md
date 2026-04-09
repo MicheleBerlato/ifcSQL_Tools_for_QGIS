@@ -7,7 +7,7 @@ What can you do with this plugin?
 - Filter to display only the IFC classes that interest you;
 - Delete IFC models you no longer need;
 
-Below is an example of a wastewater treatment plant. <br><br>
+Below is an example of a wastewater treatment plant consisting of 21 IFC files! <br><br>
 
 <p align="center"> <img src="github_images/00_WWTP_IFC.png" alt="Screenshot ZIP download" /> </p>
 
