@@ -1,5 +1,13 @@
 ﻿<!-- IfcSharp-documentation, Copyright (c) 2020, 2021 Bernhard Simon Bock, Friedrich Eder, MIT License (see https://github.com/IfcSharp/IfcSharpLibrary/tree/master/Licence) --->
 
+> [!NOTE]
+> ## DISCLAIMER:
+> 
+> This folder contains a fork of a IfcSQL-main repository as of 1 April 2026. The local copy of the software is used to facilitate the installation from within the plugin.
+>
+> The source code can be found at: https://github.com/IfcSharp/IfcSQL
+> 
+
 # ifcSQL-Database
 ![](doc/img/ifcSQL_10_blue2.png)
 
