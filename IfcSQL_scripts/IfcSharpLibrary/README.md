@@ -1,3 +1,14 @@
+> [!NOTE]
+> ## DISCLAIMER:
+> 
+> This folder contains a fork of the IfcSharpLibrary repository as of 1 April 2026. The local copy of the software is used to facilitate the installation from within the plugin.
+>
+> The source code can be found at: https://github.com/IfcSharp/IfcSharpLibrary
+
+<br>
+<br>
+
+
 # IfcSharpLibrary
 
 The C#-Library of IfcSharp contains interfaces to the IFC-model of buildingSMART, which is described [here](https://technical.buildingsmart.org/standards/ifc/ifc-schema-specifications/).
