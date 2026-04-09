@@ -1,6 +1,13 @@
 # <img src="https://github.com/MicheleBerlato/ifcSQL_Tools_for_QGIS/raw/main/Icons/icon.png" width="40" alt="icon"> ifcSQL_Tools_for_QGIS 
 This repository contains the code for the ifcSQL_Tools QGIS plugin that allows you to interact with (load, view, filter, and delete) IFC data stored in the ifcSQL database system. 
-You can upload all your georeferenced IFC files to the ifcSQL database and view them directly in the QGIS GUI in 2D or 3D. Below is an example of a wastewater treatment plant. <br><br>
+
+What can you do with this plugin?
+- Load all your georeferenced IFC models;
+- View all your IFC models simultaneously on a map (in 2D or 3D);
+- Filter to display only the IFC classes that interest you;
+- Delete IFC models you no longer need;
+
+Below is an example of a wastewater treatment plant. <br><br>
 
 <p align="center"> <img src="github_images/00_WWTP_IFC.png" alt="Screenshot ZIP download" /> </p>
 
@@ -24,7 +31,7 @@ You can upload all your georeferenced IFC files to the ifcSQL database and view 
 <br><br> ![GIF plugin folder](github_images/05.1_Connect_postgres.png) <br><br>
 
 
-(1) You can import an IFC file using the “Import IFC file” button. Remember that you must import the file first into MSSQL and then into PostgreSQL for the process to be complete. The steps to follow (for both databases) are:
+(1) You can import an IFC file using the “Import IFC file” button. Remember that you must import the file first into MSSQL and then into PostgreSQL for the process to be complete. If you need help georeferencing an IFC model, see: https://ifcgref.bk.tudelft.nl/. The steps to follow (for both databases) are:
 - Select an existing connection or create a new one.
 - Connect to the selected database.
 - Select the IFC file you want to import (for import into PostgreSQL, the plugin will suggest the last file imported into MSSQL).
