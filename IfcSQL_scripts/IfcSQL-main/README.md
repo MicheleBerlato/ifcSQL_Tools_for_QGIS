@@ -3,10 +3,12 @@
 > [!NOTE]
 > ## DISCLAIMER:
 > 
-> This folder contains a fork of a IfcSQL-main repository as of 1 April 2026. The local copy of the software is used to facilitate the installation from within the plugin.
+> This folder contains a fork of the IfcSQL repository as of 1 April 2026. The local copy of the software is used to facilitate the installation from within the plugin.
 >
 > The source code can be found at: https://github.com/IfcSharp/IfcSQL
-> 
+
+<br>
+<br>
 
 # ifcSQL-Database
 ![](doc/img/ifcSQL_10_blue2.png)
