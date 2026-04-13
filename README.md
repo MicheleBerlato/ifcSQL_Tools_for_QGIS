@@ -22,7 +22,7 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 
 # How to install and set up the plugin? 
 
-(1) Download the **Source code (zip)** from the "Relases".
+(1) Download the **Source code (zip)** from the "Releases".
 <br><br> ![Screenshot ZIP download](github_images/02_ZIP_download.png) <br><br>
 
 (2) Install the plugin from the ZIP file in QGIS. 
