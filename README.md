@@ -13,6 +13,13 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 
 ![Screenshot ZIP download](github_images/01_WWTP_QGIS.png) <br><br><br><br>
 
+<br><br>
+> [!NOTE]
+> 
+> Currently, the plugin is designed to work only on Windows and with QGIS 3.
+>
+<br><br>
+
 # How to install and set up the plugin? 
 
 (1) Download the ZIP file.
