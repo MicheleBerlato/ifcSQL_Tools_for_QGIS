@@ -17,6 +17,7 @@ import sys
 import importlib
 import zipfile
 import site
+import concurrent.futures
 
 
 
@@ -178,6 +179,7 @@ class MyPlugin:
             if os.path.exists(locale_path):
                 self.translator.load(locale_path)
                 QCoreApplication.installTranslator(self.translator)
+
         # 3. Se è 'it', non carichiamo nessun traduttore: Qt userà le stringhe originali del codice.
         # -------------------------
 
@@ -452,7 +454,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
     def log_error(self, message):
         """Scrive errore nel log e mostra popup"""
         QgsMessageLog.logMessage(message, "Importazione IFC", level=Qgis.Critical)
-        QMessageBox.critical(self, "Errore", message)
+        QMessageBox.critical(self, self.tr("Errore"), message)
     
     #resetta l'interfaccia utente quando si cambia la connessione selezionata MSSQL e PostgreSQL
     
@@ -591,6 +593,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         self.label_led_MSSQL.setText(self.tr("Connessione fallita"))
         self.pushButton_ConnettiMSSQL.setEnabled(True)
         QMessageBox.warning(self, self.tr("Errore MSSQL"), self.tr("Impossibile raggiungere il database.\n\nDettaglio:\n{err}").format(err=err_msg))
+    
     # Funzione controllo georeferenziazione
 
     @staticmethod
@@ -803,6 +806,8 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
 
             return True # Blocca l'importazione
 
+    # Funzione per eseguire l'importazione tramite eseguibile precompilato
+
     def esegui_importazione_exe(self, file_path, server_host, schema_version, progress_dialog):
         """
         Lancia gli eseguibili precompilati (Import_IFC4.exe o Import_IFC4X3.exe)
@@ -835,7 +840,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         self.log_info(f"Server Target: {server_host}")
 
         progress_dialog.setValue(50)
-        progress_dialog.setLabelText(self.tr("Importazione in corso con {exe_name}...\nL'operazione potrebbe richiedere alcuni minuti.").format(exe_name=exe_name))
+        progress_dialog.setLabelText(self.tr("Importazione in corso con {exe_name}.\nL'operazione potrebbe richiedere alcuni minuti.\nAspetta anche se QGIS sembra bloccato.").format(exe_name=exe_name))
         QApplication.processEvents()
 
         # Impostazioni per nascondere la finestra console su Windows
@@ -1148,27 +1153,39 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             if conn:
                 conn.close()
 
+    
+    # funzione per eseguire l'importazione in parallelo su più core
+
+    @staticmethod
+    def _run_single_ifcconvert(command, element_gid):
+        """Funzione helper isolata per essere eseguita in parallelo sui vari core."""
+        try:
+            # HIDE_WINDOW_FLAGS è globale nel tuo file
+            subprocess.run(command, check=True, capture_output=True, text=True, creationflags=HIDE_WINDOW_FLAGS)
+            return (True, element_gid, None)
+        except subprocess.CalledProcessError as e:
+            return (False, element_gid, e.stderr)
+
     #Funzione per trasformare gli elementi IFC in OBJ
 
     @staticmethod
     def convert_ifc_to_obj(ifc, elements, space, ifcconvert_path, output_dir, progress_dialog, original_ifc_path):
         """
-        Converte tutti gli IfcElement e IfcSpace da un file IFC in file OBJ separati.
+        Converte IfcElement e IfcSpace in OBJ sfruttando il Multithreading Dinamico.
         """
-        
-        log_report = [] # Qui salviamo i messaggi per l'utente
+        log_report = []
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Trovati {numero_elements} IfcElement e {numero_space} IfcSpace.\n").format(numero_elements=len(elements), numero_space=len(space)))
 
-        # Contatore per la barra di avanzamento
+        # Calcolo dinamico dei core: lascia sempre 1 core libero per QGIS/Windows
+        worker_ottimali = max(1, (os.cpu_count() or 4) - 1)
+        log_report.append(f"Elaborazione parallela su {worker_ottimali} core.\n")
+
         current_step = 0 
         operation_aborted = False
+        success_count = 0
+        failed_count = 0
+        skipped_count = 0
 
-        # Inizializzazione contatori ### ---
-        success_count = 0   # Elementi convertiti correttamente
-        failed_count = 0    # Elementi che hanno generato errore
-        skipped_count = 0   # Elementi saltati 
-
-        # Controlla duplicati
         global_ids = [el.GlobalId for el in elements]
         duplicates = set([gid for gid in global_ids if global_ids.count(gid) > 1])
         if duplicates:
@@ -1176,61 +1193,48 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         
         skip_types = {"IfcOpeningElement"}
         
-        # --- Ciclo per gli IfcElement ---
+        # ==========================================
+        # 1. PREPARAZIONE E CONVERSIONE IFCELEMENT
+        # ==========================================
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "\n---- Conversione IfcElement ----\n"))
         
+        tasks_elements = []
         for idx, element in enumerate(elements, start=1):
-            
-            #serve per aggiornare la barra di avanzamento
-            current_step += 1
-            progress_dialog.setValue(current_step)
-
-            # Controlla se l'utente ha cliccato "Annulla"
-            if progress_dialog.wasCanceled():
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "OPERAZIONE ANNULLATA DALL'UTENTE"))
-                operation_aborted = True
-                break # Esce dal ciclo for
-            
-            # Salta i tipi da escludere
             if element.is_a() in skip_types:
                 skipped_count += 1
                 continue
             
-            # Costruisci i nomi dei file usando element number, class name, e GlobalId
-            class_name = element.is_a()
-            obj_filename = f"{idx}_{class_name}_{element.GlobalId}.obj"
-            
-            # Percorso output OBJ
+            obj_filename = f"{idx}_{element.is_a()}_{element.GlobalId}.obj"
             temp_obj_path = os.path.join(output_dir, obj_filename)
             
-            # CONVERSIONE PARTENDO DA UN FILE IFC COMPLETO ORIGINALE
             command = [
-                ifcconvert_path,
-                original_ifc_path,      # File IFC COMPLETO originale
-                temp_obj_path,          # Output OBJ
-                "--include",            # Filtro
-                "attribute", 
-                "GlobalId", 
-                element.GlobalId
+                ifcconvert_path, original_ifc_path, temp_obj_path,
+                "--include", "attribute", "GlobalId", element.GlobalId
             ]
+            tasks_elements.append((command, element.GlobalId))
 
-            success = False
-            try:
-                # Usiamo capture_output per intercettare gli errori
-                subprocess.run(command, check=True, capture_output=True, text=True, creationflags=HIDE_WINDOW_FLAGS)
-                success = True
-            except subprocess.CalledProcessError as e:
-                # Se IfcConvert fallisce, scrive l'errore nel report
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "ERRORE (IfcConvert): {errore}").format(errore=e.stderr))
-            
-            #Registra il fallimento nel log, se la conversione non è riuscita
-            if success:
-                success_count += 1
-            else:
-                failed_count += 1
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Conversione fallita per: {element_GID}\n").format(element_GID=element.GlobalId))
+        # Esecuzione parallela
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_ottimali) as executor:
+            futures = {executor.submit(ImportaIFCDialog._run_single_ifcconvert, cmd, gid): gid for cmd, gid in tasks_elements}
 
-        # Se annullato, ritorna subito False
+            for future in concurrent.futures.as_completed(futures):
+                current_step += 1
+                progress_dialog.setValue(current_step)
+                QApplication.processEvents() # Mantiene l'interfaccia di QGIS fluida
+
+                if progress_dialog.wasCanceled():
+                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "OPERAZIONE ANNULLATA DALL'UTENTE"))
+                    operation_aborted = True
+                    executor.shutdown(wait=False) # Blocca i processi in coda
+                    break
+                    
+                success, gid, err = future.result()
+                if success:
+                    success_count += 1
+                else:
+                    failed_count += 1
+                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Conversione fallita per: {element_GID}\nErrore: {err}\n").format(element_GID=gid, err=err))
+
         if operation_aborted:
             return False, log_report
 
@@ -1238,72 +1242,58 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         nomi_esclusi = ", ".join(sorted(skip_types))
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "- Convertiti: {success_count} \n- Esclusi: {skipped_count} ({nomi_esclusi}) \n- Falliti: {failed_count}. \n").format(success_count=success_count, skipped_count=skipped_count, nomi_esclusi=nomi_esclusi, failed_count=failed_count))
 
-        # Inizializza contatori per gli IfcSpace
+        # ==========================================
+        # 2. PREPARAZIONE E CONVERSIONE IFCSPACE
+        # ==========================================
         space_success_count = 0
         space_failed_count = 0
-
-        # --- Ciclo per gli IfcSpace ---
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "\n---- Conversione IfcSpace ----\n"))
 
+        tasks_space = []
         for idx, sp in enumerate(space, start=1):
-
-            #aggiornare la barra di avanzamento
-            current_step += 1
-            progress_dialog.setValue(current_step)
-
-            # Controlla se l'utente ha cliccato "Annulla"
-            if progress_dialog.wasCanceled():
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "OPERAZIONE ANNULLATA DALL'UTENTE"))
-                operation_aborted = True
-                break # Esce dal ciclo for
-
-            # Costruisci i nomi dei file usando element number, class name, e GlobalId
-            class_name = sp.is_a()
-            obj_filename = f"{idx}_{class_name}_{sp.GlobalId}.obj"
-            # Percorso output OBJ
+            obj_filename = f"{idx}_{sp.is_a()}_{sp.GlobalId}.obj"
             temp_obj_path = os.path.join(output_dir, obj_filename)
 
             command = [
-                ifcconvert_path,
-                original_ifc_path,      # File ORIGINALE
-                temp_obj_path,          # Output
-                "--include",            # Filtro
-                "attribute", 
-                "GlobalId", 
-                sp.GlobalId,
-                "--exclude", "entities", "IfcOpeningElement" # Esclude IfcOpeningElement ma non IFCSPACE
+                ifcconvert_path, original_ifc_path, temp_obj_path,
+                "--include", "attribute", "GlobalId", sp.GlobalId,
+                "--exclude", "entities", "IfcOpeningElement"
             ]
+            tasks_space.append((command, sp.GlobalId))
 
-            success = False
-            try:
-                subprocess.run(command, check=True, capture_output=True, text=True, creationflags=HIDE_WINDOW_FLAGS)
-                success = True
-            except subprocess.CalledProcessError as e:
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "ERRORE (IfcConvert): {errore}").format(errore=e.stderr))
-            
-            #Registra il fallimento nel log, se la conversione non è riuscita
-            if success:
-                space_success_count += 1
-            else:
-                space_failed_count += 1
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Conversione fallita per: {element_GID}\n").format(element_GID=sp.GlobalId))
+        # Esecuzione parallela
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_ottimali) as executor:
+            futures = {executor.submit(ImportaIFCDialog._run_single_ifcconvert, cmd, gid): gid for cmd, gid in tasks_space}
+
+            for future in concurrent.futures.as_completed(futures):
+                current_step += 1
+                progress_dialog.setValue(current_step)
+                QApplication.processEvents()
+
+                if progress_dialog.wasCanceled():
+                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "OPERAZIONE ANNULLATA DALL'UTENTE"))
+                    operation_aborted = True
+                    executor.shutdown(wait=False)
+                    break
+                    
+                success, gid, err = future.result()
+                if success:
+                    space_success_count += 1
+                else:
+                    space_failed_count += 1
+                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Conversione fallita per: {element_GID}\nErrore: {err}\n").format(element_GID=gid, err=err))
 
         if operation_aborted:
             return False, log_report
         
-        # --- Riepilogo immediato Space ---
+        # --- RIEPILOGHI FINALI ---
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Riepilogo Conversione IfcSpace:"))
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "- Convertiti: {success_count}\n- Falliti: {failed_count}.\n").format(success_count=space_success_count, failed_count=space_failed_count))
 
-        # --- Riepilogo finale ---
-        obj_files = [f for f in os.listdir(output_dir) if f.lower().endswith('.obj')] # Conta gli elementi convertiti in OBJ
-        converted_ids = {f.split('_', 2)[-1][:-4] for f in obj_files} # Estrai GlobalId dagli OBJ generati (il formato è: "{idx}_{class_name}_{GlobalId}.obj"), Prende tutto dopo il secondo underscore fino a ".obj"
+        obj_files = [f for f in os.listdir(output_dir) if f.lower().endswith('.obj')]
+        converted_ids = {f.split('_', 2)[-1][:-4] for f in obj_files}
         
-        not_converted = [
-            (el.is_a(), el.GlobalId)
-            for el in elements
-            if el.is_a() not in skip_types and el.GlobalId not in converted_ids
-        ]
+        not_converted = [(el.is_a(), el.GlobalId) for el in elements if el.is_a() not in skip_types and el.GlobalId not in converted_ids]
 
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "\n---- RIEPILOGO FINALE ----\n"))
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Totale file OBJ creati: {obj_count}\n").format(obj_count=len(obj_files)))
@@ -1314,19 +1304,14 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             for class_name, gid in not_converted:
                 log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "  -> Classe: {class_name}, GlobalId: {gid}\n").format(class_name=class_name, gid=gid))
 
-        # Controlla gli IfcSpace non convertiti
-        space_not_converted = [
-            (sp.is_a(), sp.GlobalId)
-            for sp in space
-            if sp.GlobalId not in converted_ids
-        ]
+        space_not_converted = [(sp.is_a(), sp.GlobalId) for sp in space if sp.GlobalId not in converted_ids]
         log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "IfcSpace NON convertiti: {space_not_converted_count}").format(space_not_converted_count=len(space_not_converted)))
         if space_not_converted:
             for class_name, gid in space_not_converted:
                 log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "  -> Classe: {class_name}, GlobalId: {gid}\n").format(class_name=class_name, gid=gid))
                 
-        # Ritorna True (Successo) e il log
         return True, log_report
+    
     
     # funzione per estrarre il sistema di coordinate da un file IFC----------------------------------------------------------
     @staticmethod
@@ -1562,24 +1547,41 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             # --- Recupera i mapping per QUESTO specifico ProjectId ---
             log_report.append(self.tr("Recupero mapping GlobalId per ProjectId {project_id}\n").format(project_id=project_id))
 
-            cursor.execute("""
-                SELECT 
-                    t1."GlobalEntityInstanceId", 
-                    t1."Value"
-                FROM 
-                    ifcinstance.entityattributeofstring AS t1
-                JOIN 
-                    ifcProject.EntityInstanceIdAssignment AS t2
-                    ON t1."GlobalEntityInstanceId" = t2."GlobalEntityInstanceId"
-                WHERE 
-                    t2."ProjectId" = %s
-            """, (project_id,))
+            # Estraiamo tutti i GlobalId necessari dal dizionario degli elementi
+            global_ids = [gid for cls, gid in element_wkts.keys()]
+            value_to_entityid = {}
 
-            entity_attributes = cursor.fetchall()
-            value_to_entityid = {value: entity_id for entity_id, value in entity_attributes}
-            
+            if not global_ids:
+                log_report.append(self.tr("ATTENZIONE: Nessun GlobalId da cercare."))
+            else:
+                # Interroghiamo il database a blocchi (batch) per evitare query troppo pesanti per l'ODBC
+                BATCH_SIZE = 500
+                for i in range(0, len(global_ids), BATCH_SIZE):
+                    batch_gids = tuple(global_ids[i:i+BATCH_SIZE])
+                    
+                    # La clausola IN %s obbliga il Foreign Data Wrapper a filtrare direttamente su MSSQL.
+                    # I GlobalId sono stringhe ASCII sicure, così evitiamo che Postgres legga stringhe con 
+                    # caratteri speciali (es. 'à', '°') che causano l'errore di codifica UTF8 0xdf.
+                    cursor.execute("""
+                        SELECT 
+                            t1."GlobalEntityInstanceId", 
+                            t1."Value"
+                        FROM 
+                            ifcinstance.entityattributeofstring AS t1
+                        JOIN 
+                            ifcProject.EntityInstanceIdAssignment AS t2
+                            ON t1."GlobalEntityInstanceId" = t2."GlobalEntityInstanceId"
+                        WHERE 
+                            t2."ProjectId" = %s
+                            AND t1."Value" IN %s
+                    """, (project_id, batch_gids))
+
+                    for entity_id, value in cursor.fetchall():
+                        value_to_entityid[value] = entity_id
+
             if not value_to_entityid:
                 log_report.append(self.tr("ATTENZIONE: Nessun mapping GlobalId trovato."))
+
 
             # --- QProgressDialog per il Database ---
             total_items = len(element_wkts)
@@ -1598,6 +1600,8 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             skipped_count = 0
             failed_count = 0
             operation_aborted = False
+
+            BATCH_SIZE = 1000
 
             for i, ((class_name, global_id), wkt) in enumerate(element_wkts.items()):
                 
@@ -1640,6 +1644,11 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
                         failed_count += 1
                 else:
                     skipped_count += 1
+
+                # --- IL TRUCCO DEL BATCHING PER SALVARE LA MEMORIA ---
+                # Se il numero di elementi elaborati è un multiplo di BATCH_SIZE...
+                if (i + 1) % BATCH_SIZE == 0:
+                    conn.commit()  # <-- QUESTO azzera la memoria dei lock in Postgres!
 
             progress_dialog_db.close()
 
@@ -1730,7 +1739,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         progress.setWindowModality(Qt.WindowModal)
         progress.setCancelButton(None)
         progress.setMinimumDuration(0) # Forza la finestra ad apparire IMMEDIATAMENTE
-        progress.resize(450, 120)      # Diamo una dimensione dignitosa di partenza
+        progress.resize(450, 120)      # Diamo una dimensione 
         progress.show()
         QApplication.processEvents()   # Ordina a QGIS di disegnare i testi PRIMA di bloccarsi
 
@@ -1895,7 +1904,13 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         # Contiamo gli elementi PRIMA di iniziare per sapere il totale
         elements = ifc.by_type("IfcElement")
         spaces = ifc.by_type("IfcSpace")
-        total_steps = len(elements) + len(spaces)
+
+        # NUOVO: Filtriamo gli elementi che sappiamo verranno ignorati
+        skip_types = {"IfcOpeningElement"}
+        elements_to_convert = [el for el in elements if el.is_a() not in skip_types]
+        
+        # Calcoliamo il totale solo sugli elementi effettivi
+        total_steps = len(elements_to_convert) + len(spaces)
         
         if total_steps == 0:
             QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Nessun IfcElement o IfcSpace trovato nel file IFC."))
@@ -1906,7 +1921,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
 
         # Creiamo e configuriamo la QProgressDialog
         progress_dialog = QProgressDialog(
-            self.tr("Conversione IFC in OBJ in corso..."), 
+            self.tr("Conversione IFC in OBJ in corso...\nSe gli elementi IFC sono molti, la conversione potrebbe richiedere molto tempo. Attendere..."), 
             self.tr("Annulla"), 
             0, 
             total_steps, 
@@ -2798,7 +2813,7 @@ class EliminaProgettoDialog(Ui_EliminaProgettoIFC, QMainWindow):
             log_formatted("STEP 2/8", self.tr("Entità target: {count_entities}").format(count_entities=count_entities))
 
             # --- 3. DISABILITAZIONE VINCOLI (TURBO MODE) ---
-            log_formatted("STEP 3/8", self.tr("Disabilitazione vincoli (Speed Boost)..."))
+            log_formatted("STEP 3/8", self.tr("Disabilitazione vincoli..."))
             progress.setValue(15)
             QApplication.processEvents()
             
@@ -2901,6 +2916,10 @@ class EliminaProgettoDialog(Ui_EliminaProgettoIFC, QMainWindow):
             cursor_pg = conn_pg.cursor()
             try:
                 cursor_pg.execute('DELETE FROM ifcgeometry.entitygeometry WHERE "ProjectNumber_MSSQL" = %s', (self.selected_project_id,))
+                
+                #Salva il numero di righe eliminate in PostgreSQL
+                count_entities_pg = cursor_pg.rowcount
+                
                 conn_pg.commit()
             finally:
                 conn_pg.close()
@@ -2908,7 +2927,7 @@ class EliminaProgettoDialog(Ui_EliminaProgettoIFC, QMainWindow):
             progress.setValue(100)
             QApplication.restoreOverrideCursor()
             progress.close()
-            QMessageBox.information(self, self.tr("Successo"), self.tr("Eliminazione del progetto completata con successo.\n (Entità IFC rimosse: {count_entities})").format(count_entities=count_entities))
+            QMessageBox.information(self, self.tr("Successo"), self.tr("Eliminazione del progetto completata con successo.\n Entità rimosse da MSSQL: {count_entities}.\n Entità rimosse da PostgreSQL: {count_entities_pg}.").format(count_entities=count_entities, count_entities_pg=count_entities_pg))
             
             self.delete_completed.emit() # Segnala al dialog principale che l'eliminazione è completata
 
