@@ -20,9 +20,9 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 >
 <br><br>
 
-# How to install and set up the plugin? 
+# 🛠️ How to install and set up the plugin? 
 
-(1) Download the **Source code (zip)** from the "Releases".
+(1) Download the **`Source code (zip)`** from the "Releases".
 <br><br> ![Screenshot ZIP download](github_images/02_ZIP_download.png) <br><br>
 
 (2) Install the plugin from the ZIP file in QGIS. 
@@ -31,7 +31,7 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 (3) Open the plugin folder, then open the “first_installation” folder and follow the instructions starting with the first PDF file: 0.Start with ifcSQL_Tools.pdf
 <br><br> ![GIF plugin folder](github_images/04_open_plugin_folder.gif) <br><br>
 
-# How to use the plugin?
+# 🚀 How to use the plugin?
 
 (0) Before you start using the plugin, you need to connect to the two databases (MSSQL and PostgreSQL) that you created in the previous steps.
 <br><br> ![GIF plugin folder](github_images/05.1_Connect_mssql.png) <br><br>
