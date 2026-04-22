@@ -45,6 +45,12 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 - Import the IFC file.
 
 It is recommended to split larger models into multiple IFC files to speed up the loading process, which might otherwise be very slow.
+
+> [!NOTE]
+> Currently, you must import georeferenced IFC models that use the same coordinate reference system (CRS). If you import IFC models with different CRSs, they will all appear on a single
+layer in QGIS, causing some models to be displayed at an incorrect geographic location relative to the QGIS map’s CRS.
+> 
+
 <br><br> ![Screenshot ImportIFCfileMSSQL](github_images/06_ImportIFCfileMSSQL.png) <br><br>
 <br><br> ![Screenshot ImportIFCfilePostgreSQL](github_images/07_ImportIFCfilePostgreSQL.png) <br><br>
 
