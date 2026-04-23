@@ -15,7 +15,7 @@ The files are numbered to guide you step-by-step through the setup process:
 * 📄 **`2.Create a user in MSSQL.pdf`**
     A detailed guide explaining how to create and properly set permissions for a new user within MSSQL.
     
-* ⚙️ **`3.ifcSQL_Installation_PostgreSQL.bat`**
+* ⚙️ **`3.ifcSQL_Mirror_Installation_PostgreSQL.bat`**
     Batch script to automate the database installation and configuration in **PostgreSQL**.
 
 ## 🚀 How to Use
