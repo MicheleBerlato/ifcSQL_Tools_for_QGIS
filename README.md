@@ -11,14 +11,15 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 
 <p align="center"> <img src="github_images/00_WWTP_IFC.png" alt="Screenshot ZIP download" /> </p>
 
-![Screenshot ZIP download](github_images/01_WWTP_QGIS.png) <br><br><br><br>
+![Screenshot ZIP download](github_images/01_WWTP_QGIS.png) <br><br><br>
 
-<br><br>
+
 > [!NOTE]
 > 
 > Currently, the plugin is designed to work only on Windows and with QGIS 3.
 >
 <br><br>
+
 
 # 🛠️ How to install and set up the plugin? 
 
@@ -28,7 +29,7 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 (2) Install the plugin from the ZIP file in QGIS. 
 <br><br> ![Screenshot install plugin from ZIP](github_images/03_Install_from_ZIP.png) <br><br>
 
-(3) Open the plugin folder, then open the “first_installation” folder and follow the instructions starting with the first PDF file: 0.Start with ifcSQL_Tools.pdf
+(3) Open the plugin folder, then open the “first_installation” folder and follow the instructions starting with the first PDF file: [0.Start with ifcSQL_Tools.pdf](./first_installation/)
 <br><br> ![GIF plugin folder](github_images/04_open_plugin_folder.gif) <br><br>
 
 # 🚀 How to use the plugin?
@@ -85,4 +86,7 @@ Once the data has been imported (MSSQL + PostgreSQL), you can easily view your I
 <br><br> 
 <img src="github_images/10_SeeGeometries.gif" alt="GIF plugin folder" width="100%"> 
 <br><br>
+
+
+
 
