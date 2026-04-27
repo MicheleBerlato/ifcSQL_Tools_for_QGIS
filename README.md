@@ -32,6 +32,11 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 (3) Open the plugin folder, then open the “first_installation” folder and follow the instructions starting with the first PDF file: [0.Start with ifcSQL_Tools.pdf](./first_installation/)
 <br><br> ![GIF plugin folder](github_images/04_open_plugin_folder.gif) <br><br>
 
+> [!NOTE]
+> Here you can find the video tutorial on how to install and set up the plugin: https://www.youtube.com/watch?v=iwmdUl1p-14
+>
+<br><br>
+
 # 🚀 How to use the plugin?
 
 (0) Before you start using the plugin, you need to connect to the two databases (MSSQL and PostgreSQL) that you created in the previous steps.
