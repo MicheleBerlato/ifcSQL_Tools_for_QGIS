@@ -87,6 +87,9 @@ Once the data has been imported (MSSQL + PostgreSQL), you can easily view your I
 - Access the layer properties and enable the 3D view representation.
 - Click the "3D map view" button.
 
+<br><br> ![GIF 3Dmapview](github_images/10_3Dmapview.gif) <br><br>
+
+
 
 
 
