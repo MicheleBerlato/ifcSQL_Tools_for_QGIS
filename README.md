@@ -50,7 +50,7 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 - Select the IFC file you want to import (to import into PostgreSQL the plugin will suggest the last file imported into MSSQL).
 - Import the IFC file.
 
-It is recommended to split larger models into multiple IFC files to speed up the loading process, which might otherwise be very slow.
+It is recommended to split larger models into multiple IFC files to speed up the loading process, which might otherwise be slow.
 
 > [!NOTE]
 > Currently, you must import georeferenced IFC models that use the same coordinate reference system (CRS). If you import IFC models with different CRSs, they will all appear on a single
@@ -81,16 +81,14 @@ layer in QGIS, causing some models to be displayed at an incorrect geographic lo
 
 # 🔍 How to view imported geometries?
 
-Once the data has been imported (MSSQL + PostgreSQL), you can easily view your IFC geometries directly within QGIS. Just follow the steps shown in the animation below:
+Once the data has been imported (MSSQL + PostgreSQL), you can easily view your IFC geometries directly within QGIS. Just follow the steps below:
 - Import the `entitygeometry` table from PostgreSQL using a simple drag-and-drop.
 - Import `OpenStreetMap` layer to provide a geographical background. 
 - Access the layer properties and enable the 3D view representation.
-- Open the QGIS **3D Map View** to explore your geometries in 3D.
+- Click the "3D map view" button.
 
 
-<br><br> 
-<img src="github_images/10_SeeGeometries.gif" alt="GIF plugin folder" width="100%"> 
-<br><br>
+
 
 
 
