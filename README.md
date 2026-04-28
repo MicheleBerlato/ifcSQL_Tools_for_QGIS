@@ -90,6 +90,16 @@ Once the data has been imported (MSSQL + PostgreSQL), you can easily view your I
 <br><br> ![GIF 3Dmapview](github_images/10_3Dmapview.gif) <br><br>
 
 
+## Summary of the folders you will find in the repository
+- first_installation = folder containing the files needed to install and set up the plugin;
+- github_images = folder containing the images shown in the GitHub readme;
+- i18n = folder containing the translation of the plugin into English;
+- Icons = folder containing the icons used in the plugin;
+- IfcSQL_scripts = folder containing the scripts for setting up the tables in the two databases;
+- tds_FDW_16 = folder containing the scripts for install the "Foreign Data Wrapper";
+- UIs = folder containing the user interfaces included in the plugin.
+
+
 
 
 
