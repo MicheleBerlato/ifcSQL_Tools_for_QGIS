@@ -1,12 +1,14 @@
 # Importa librerie di QGIS
-from qgis.PyQt.QtWidgets import QAction, QMenu, QMessageBox, QDialog, QAbstractItemView, QMainWindow, QFileDialog, QProgressDialog, QApplication, QDockWidget, QListWidgetItem, QDockWidget
-from qgis.PyQt.QtGui import QIcon, QColor, QStandardItemModel, QStandardItem, QCursor
+from qgis.PyQt.QtWidgets import QAction, QMenu, QMessageBox, QDialog, QAbstractItemView, QMainWindow, QFileDialog, QProgressDialog, QApplication, QDockWidget, QListWidgetItem, QDockWidget, QToolBar, QCheckBox, QVBoxLayout, QLabel, QDialogButtonBox
+from qgis.PyQt.QtGui import QIcon, QColor, QStandardItemModel, QStandardItem
 from qgis.PyQt.QtCore import QSettings, Qt, QSortFilterProxyModel, pyqtSignal, QCoreApplication, QTranslator, QThread
-from qgis.core import Qgis, QgsMessageLog, QgsVectorLayer, QgsDataSourceUri, QgsProject, QgsPointXY, QgsGeometry, QgsWkbTypes, QgsFeature, QgsField
-from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker, QgsMapCanvas, QgsMapToolPan
+from qgis.core import Qgis, QgsMessageLog, QgsVectorLayer, QgsDataSourceUri, QgsProject, QgsWkbTypes, QgsFeature
+from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker, QgsMapCanvas, QgsMapToolPan, QgsMapToolExtent
+
+from qgis._3d import Qgs3DMapCanvas, Qgs3DMapSettings
 
 
-# Importa librerie standard di Python
+# Importa librerie standard di Pytho
 import os
 import re
 import subprocess
@@ -30,15 +32,11 @@ else:
 # Importa librerie esterne 
 try:
     import ifcopenshell
+    import ifcopenshell.geom
     IFCOPENSHELL_PRESENTE = True
 except ImportError:
     IFCOPENSHELL_PRESENTE = False # La libreria non è installata
 
-try:
-    import trimesh
-    TRIMESH_PRESENTE = True
-except ImportError:
-    TRIMESH_PRESENTE = False
 
 try:
     import numpy as np
@@ -198,6 +196,10 @@ class MyPlugin:
         self.action2 = None
         self.action3 = None
         self.action4 = None
+        self.action5 = None
+
+        # Variabile per tracciare il canvas 3D
+        self.canvas_3d = None
 
     # Funzione di utilità per la traduzione delle stringhe
     def tr(self, message):
@@ -243,6 +245,11 @@ class MyPlugin:
         self.menu.addAction(self.action4)
         self.action4.triggered.connect(self.run_query)
 
+        # Pulsante 5
+        self.action5 = QAction(QIcon(os.path.join(plugin_directory, 'icons', 'icon_3dmap.png')), self.tr("3D Map View"), self.iface.mainWindow())
+        self.menu.addAction(self.action5)
+        self.action5.triggered.connect(self.run_3dmap) 
+
         # -----------------------------------------------------------
         # 3. GESTIONE DELLA TOOLBAR DEDICATA
         #------------------------------------------------------------    
@@ -255,6 +262,7 @@ class MyPlugin:
         self.toolbar.addAction(self.action2)
         #self.toolbar.addAction(self.action3)
         self.toolbar.addAction(self.action4)
+        self.toolbar.addAction(self.action5)
 
     # Rimuovi l'interfaccia grafica del plugin    
 
@@ -299,7 +307,7 @@ class MyPlugin:
             self.query_dialog.reset_ui_on_connection_change_PostgreSQL_Query()
     
     def run_query(self, checked):
-        # --- 1. CREAZIONE E CONFIGURAZIONE INIZIALE (Solo la prima volta) ---
+        # --- 1. CREAZIONE E CONFIGURAZIONE INIZIALE ---
         if not self.query_dialog:
             self.query_dialog = QueryDialog(self.iface, parent=self.iface.mainWindow())
             self.query_dialog.setObjectName("IfcSqlQueryDock") 
@@ -330,7 +338,7 @@ class MyPlugin:
             if self.query_dialog.isVisible():
                 self.query_dialog.hide()
 
-    # --- 3. NUOVA FUNZIONE HELPER PER GESTIRE L'AGGIANCIO ---
+    # --- 3. FUNZIONE HELPER PER GESTIRE L'AGGIANCIO ---
     def force_tabify_dock(self):
         """
         Cerca un altro pannello a destra e forza la creazione delle schede (Tabs).
@@ -369,6 +377,168 @@ class MyPlugin:
         # C. Eseguiamo l'aggancio
         if target_dock:
             mainWindow.tabifyDockWidget(target_dock, self.query_dialog)
+
+
+
+    #-----------------------------------------------
+
+    def run_3dmap(self):
+        """Fase 1: Attiva lo strumento per disegnare il ritaglio sulla mappa 2D"""
+        
+        # 1. Creiamo la spunta (CheckBox)
+        self.cb_nascondi_space = QCheckBox(self.tr("Nascondi i volumi degli IfcSpace."))
+        self.cb_nascondi_space.setChecked(True) # Selezionato di default
+
+        # 2. Ripristiniamo la tua finestra originale e inseriamo la spunta
+        msgBox = QMessageBox(self.iface.mainWindow())
+        msgBox.setWindowTitle("3D Map View")
+        msgBox.setText(self.tr("-- STRUMENTO DI DISEGNO --\nDisegna un rettangolo sulla mappa per ritagliare l'area da vedere in 3D.\n"
+        "Clicca e trascina per disegnare, poi rilascia il mouse per confermare.\n\n-- FILTRI IFC (chiudi la mappa 3D per ripristinare i filtri) --"))
+        msgBox.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        msgBox.setCheckBox(self.cb_nascondi_space) # Aggiunge la spunta in basso
+
+        # Mostra l'avviso e controlla la risposta
+        risposta = msgBox.exec_()
+
+        # Controlla cosa ha cliccato l'utente
+        if risposta == QMessageBox.Cancel:
+            # L'utente ha annullato, usciamo dalla funzione senza fare nulla
+            return
+
+        # Salviamo la scelta dell'utente per la Fase 2
+        self.nascondi_ifcspace = self.cb_nascondi_space.isChecked()
+
+        # Se ha cliccato OK, procediamo con l'attivazione dello strumento
+        canvas = self.iface.mapCanvas()
+        
+        # Crea lo strumento di selezione rettangolare
+        self.extent_tool = QgsMapToolExtent(canvas)
+        
+        # Cambia il cursore (es. un mirino) per far capire che si deve disegnare
+        self.extent_tool.setCursor(Qt.CrossCursor) 
+
+        # Quando l'utente rilascia il mouse e l'estensione è pronta, lancia la fase 2
+        self.extent_tool.extentChanged.connect(self.apri_vista_3d_ritagliata)
+        
+        # Imposta lo strumento come attivo sulla mappa
+        canvas.setMapTool(self.extent_tool)
+        
+
+
+
+    def apri_vista_3d_ritagliata(self, extent):
+        """Fase 2: Apre la mappa 3D applicando l'estensione disegnata"""
+        
+        # 1. Disattiva lo strumento di selezione e torna al cursore standard (Pan)
+        self.iface.mapCanvas().unsetMapTool(self.extent_tool)
+        
+        # 2. Controllo di sicurezza: se l'utente fa un clic singolo (area nulla), annulliamo
+        # isEmpty() controlla se il rettangolo è nullo o malformato, area() controlla l'estensione
+        if extent.isEmpty() or extent.width() == 0 or extent.height() == 0:
+            # Avvisa l'utente del perché non succede nulla
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "3D Map View",
+                self.tr("Clic singolo rilevato. Devi cliccare e trascinare per disegnare un rettangolo.\n\nOperazione annullata."),
+            )
+            return # Esce dalla funzione senza creare la mappa 3D
+        
+        # --- 3. APPLICAZIONE FILTRO TEMPORANEO ---
+        # Creiamo un dizionario per salvare i filtri precedenti prima di modificarli
+        self.filtri_originali_3d = {}
+        
+        if getattr(self, 'nascondi_ifcspace', False):
+            layers = self.iface.mapCanvas().layers()
+            for layer in layers:
+                if isinstance(layer, QgsVectorLayer) and layer.fields().indexOf("IfcClass") != -1:
+                    subset = layer.subsetString()
+                    
+                    # Salviamo lo stato attuale del layer nel dizionario (anche se vuoto)
+                    self.filtri_originali_3d[layer.id()] = subset
+                    
+                    # Applichiamo il filtro per escludere gli IfcSpace
+                    filter_str = "\"IfcClass\" != 'IfcSpace'"
+                    if subset:
+                        # Evita di aggiungerlo se per caso l'utente lo aveva già scritto a mano
+                        if "IfcSpace" not in subset:
+                            layer.setSubsetString(f"({subset}) AND {filter_str}")
+                    else:
+                        layer.setSubsetString(filter_str)
+        # -----------------------------------------
+        
+        # imposta nome vista 
+        nome_vista = "IFC 3D View"
+
+        # ---> GESTIONE PULITA DEL PROGETTO <---
+        project = QgsProject.instance()
+        
+        # Rimuoviamo la vecchia vista "IFC 3D View" dal manager prima di crearne una nuova
+        if hasattr(project, 'viewsManager'):
+            manager = project.viewsManager()
+            if hasattr(manager, 'remove3DView'):
+                # Rimuove chirurgicamente solo la nostra vista, lasciando intatte quelle dell'utente
+                manager.remove3DView(nome_vista)
+
+        #-----------------------------------
+        
+        # 3. Crea la mappa 3D nativa
+        canvas_3d = self.iface.createNewMapCanvas3D(nome_vista)
+        
+        # 4. Applica il ritaglio e l'inquadratura
+        if canvas_3d:
+
+            try:
+                # Recupera le impostazioni del 3D
+                settings_3d = canvas_3d.mapSettings()
+                
+                # Questa è la funzione che "ritaglia" fisicamente la scena rispetto alla Bounding Box
+                settings_3d.setExtent(extent)
+                
+                # Per ottimizzare l'esperienza, punta la telecamera direttamente sull'area
+                canvas_3d.scene().viewZoomFull()
+                 
+            except AttributeError:
+                QMessageBox.warning(self.iface.mainWindow(), "3D Map View", self.tr("La tua versione di QGIS non supporta il ritaglio 3D. Aggiorna ad una versione superiore per questa funzionalità."))
+            
+
+            canvas_3d.destroyed.connect(self.ripristina_filtri_ifcspace)
+
+    
+    # togli i filtri applicati agli IfcSpace quando chiudi la vista 3D, in modo da non lasciare modifiche permanenti sui layer 2D
+    def ripristina_filtri_ifcspace(self, obj=None):
+        """Fase 3: Ripristina i layer 2D in automatico quando chiudi la vista 3D"""
+        
+        if hasattr(self, 'filtri_originali_3d') and self.filtri_originali_3d:
+            
+            # Ripristina ogni layer esattamente al suo stato originale
+            for layer_id, filtro_orig in self.filtri_originali_3d.items():
+                layer = QgsProject.instance().mapLayer(layer_id)
+                if layer:
+                    layer.setSubsetString(filtro_orig)
+            
+            # Svuotiamo il dizionario
+            self.filtri_originali_3d.clear()
+            
+            # Messaggio di conferma
+            self.iface.messageBar().pushMessage(
+                "3D Map View", 
+                self.tr("Mappa 3D chiusa. I filtri originali sono stati ripristinati."), 
+                level=Qgis.Success, 
+                duration=3
+            )
+
+            
+        
+
+
+    
+
+
+
+
+
+
+
 
 
 
@@ -840,7 +1010,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         self.log_info(f"Server Target: {server_host}")
 
         progress_dialog.setValue(50)
-        progress_dialog.setLabelText(self.tr("Importazione in corso con {exe_name}.\nL'operazione potrebbe richiedere alcuni minuti.\nAspetta anche se QGIS sembra bloccato.").format(exe_name=exe_name))
+        progress_dialog.setLabelText(self.tr("Importazione in corso con {exe_name}.\nL'operazione potrebbe richiedere alcuni minuti...\n\nAspetta anche se QGIS sembra bloccato.").format(exe_name=exe_name))
         QApplication.processEvents()
 
         # Impostazioni per nascondere la finestra console su Windows
@@ -1153,165 +1323,160 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             if conn:
                 conn.close()
 
-    
-    # funzione per eseguire l'importazione in parallelo su più core
 
-    @staticmethod
-    def _run_single_ifcconvert(command, element_gid):
-        """Funzione helper isolata per essere eseguita in parallelo sui vari core."""
-        try:
-            # HIDE_WINDOW_FLAGS è globale nel tuo file
-            subprocess.run(command, check=True, capture_output=True, text=True, creationflags=HIDE_WINDOW_FLAGS)
-            return (True, element_gid, None)
-        except subprocess.CalledProcessError as e:
-            return (False, element_gid, e.stderr)
 
-    #Funzione per trasformare gli elementi IFC in OBJ
 
-    @staticmethod
-    def convert_ifc_to_obj(ifc, elements, space, ifcconvert_path, output_dir, progress_dialog, original_ifc_path):
+    def convert_ifc_to_wkt_in_memory(self, elements_to_convert, spaces_to_convert, easting, northing, orthogonal_height, x_axis_abscissa, x_axis_ordinate, progress_dialog):
         """
-        Converte IfcElement e IfcSpace in OBJ sfruttando il Multithreading Dinamico.
+        Estrae le geometrie IFC direttamente in RAM usando ifcopenshell.geom,
+        applica la georeferenziazione e genera il WKT 3D (Multipolygon Z).
         """
-        log_report = []
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Trovati {numero_elements} IfcElement e {numero_space} IfcSpace.\n").format(numero_elements=len(elements), numero_space=len(space)))
+        log_report = [self.tr("--- Conversione IFC in WKT ---\n")]
+        
+        # Uniamo tutti gli elementi in una singola lista
+        all_elements = elements_to_convert + spaces_to_convert
+        total_elements = len(all_elements)
+        
+        log_report.append(self.tr("Elementi totali da processare: {tot}\n").format(tot=total_elements))
 
-        # Calcolo dinamico dei core: lascia sempre 1 core libero per QGIS/Windows
-        worker_ottimali = max(1, (os.cpu_count() or 4) - 1)
-        log_report.append(f"Elaborazione parallela su {worker_ottimali} core.\n")
+        log_report.append(self.tr("Nota: vengono processati gli IfcElement e gli IfcSpace, mentre sono esclusi gli IfcOpeningElement.\n"))
 
-        current_step = 0 
+        # Configurazione ifcopenshell.geom
+        settings = ifcopenshell.geom.settings()
+        settings.set(settings.USE_WORLD_COORDS, True) 
+
+        element_wkts = {}
+        successi = 0
+        fallimenti = 0
+
+        # LISTA PER MEMORIZZARE I DETTAGLI DEGLI ERRORI
+        dettaglio_fallimenti = []
+        
+        # Variabile per controllare l'annullamento
         operation_aborted = False
-        success_count = 0
-        failed_count = 0
-        skipped_count = 0
 
-        global_ids = [el.GlobalId for el in elements]
-        duplicates = set([gid for gid in global_ids if global_ids.count(gid) > 1])
-        if duplicates:
-            log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "ATTENZIONE: Trovati elementi duplicati (GlobalId): {GID_duplicates}\n").format(GID_duplicates=duplicates))
-        
-        skip_types = {"IfcOpeningElement"}
-        
-        # ==========================================
-        # 1. PREPARAZIONE E CONVERSIONE IFCELEMENT
-        # ==========================================
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "\n---- Conversione IfcElement ----\n"))
-        
-        tasks_elements = []
-        for idx, element in enumerate(elements, start=1):
-            if element.is_a() in skip_types:
-                skipped_count += 1
-                continue
-            
-            obj_filename = f"{idx}_{element.is_a()}_{element.GlobalId}.obj"
-            temp_obj_path = os.path.join(output_dir, obj_filename)
-            
-            command = [
-                ifcconvert_path, original_ifc_path, temp_obj_path,
-                "--include", "attribute", "GlobalId", element.GlobalId
-            ]
-            tasks_elements.append((command, element.GlobalId))
-
-        # Esecuzione parallela
-        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_ottimali) as executor:
-            futures = {executor.submit(ImportaIFCDialog._run_single_ifcconvert, cmd, gid): gid for cmd, gid in tasks_elements}
-
-            for future in concurrent.futures.as_completed(futures):
-                current_step += 1
-                progress_dialog.setValue(current_step)
-                QApplication.processEvents() # Mantiene l'interfaccia di QGIS fluida
-
-                if progress_dialog.wasCanceled():
-                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "OPERAZIONE ANNULLATA DALL'UTENTE"))
-                    operation_aborted = True
-                    executor.shutdown(wait=False) # Blocca i processi in coda
-                    break
-                    
-                success, gid, err = future.result()
-                if success:
-                    success_count += 1
-                else:
-                    failed_count += 1
-                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Conversione fallita per: {element_GID}\nErrore: {err}\n").format(element_GID=gid, err=err))
-
-        if operation_aborted:
-            return False, log_report
-
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Riepilogo Conversione IfcElement:"))
-        nomi_esclusi = ", ".join(sorted(skip_types))
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "- Convertiti: {success_count} \n- Esclusi: {skipped_count} ({nomi_esclusi}) \n- Falliti: {failed_count}. \n").format(success_count=success_count, skipped_count=skipped_count, nomi_esclusi=nomi_esclusi, failed_count=failed_count))
-
-        # ==========================================
-        # 2. PREPARAZIONE E CONVERSIONE IFCSPACE
-        # ==========================================
-        space_success_count = 0
-        space_failed_count = 0
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "\n---- Conversione IfcSpace ----\n"))
-
-        tasks_space = []
-        for idx, sp in enumerate(space, start=1):
-            obj_filename = f"{idx}_{sp.is_a()}_{sp.GlobalId}.obj"
-            temp_obj_path = os.path.join(output_dir, obj_filename)
-
-            command = [
-                ifcconvert_path, original_ifc_path, temp_obj_path,
-                "--include", "attribute", "GlobalId", sp.GlobalId,
-                "--exclude", "entities", "IfcOpeningElement"
-            ]
-            tasks_space.append((command, sp.GlobalId))
-
-        # Esecuzione parallela
-        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_ottimali) as executor:
-            futures = {executor.submit(ImportaIFCDialog._run_single_ifcconvert, cmd, gid): gid for cmd, gid in tasks_space}
-
-            for future in concurrent.futures.as_completed(futures):
-                current_step += 1
-                progress_dialog.setValue(current_step)
+        for i, el in enumerate(all_elements):
+            # 1. Aggiornamento progress bar e anti-freeze QGIS (Batching visivo ogni 50 elementi)
+            if i % 50 == 0:
+                progress_dialog.setValue(i)
                 QApplication.processEvents()
-
+                
                 if progress_dialog.wasCanceled():
-                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "OPERAZIONE ANNULLATA DALL'UTENTE"))
+                    log_report.append(self.tr("\nOPERAZIONE ANNULLATA DALL'UTENTE."))
                     operation_aborted = True
-                    executor.shutdown(wait=False)
                     break
+
+            class_name = el.is_a()
+            global_id = el.GlobalId
+
+            try:
+                # 2. Creazione geometria in RAM
+                shape = ifcopenshell.geom.create_shape(settings, el)
+                
+                # 3. Estrazione vertici e facce
+                verts = np.array(shape.geometry.verts).reshape(-1, 3)
+                faces = np.array(shape.geometry.faces).reshape(-1, 3)
+
+                # 4. Traslazione e Rotazione (Georeferenziazione)
+                if all(v is not None for v in [easting, northing, orthogonal_height, x_axis_abscissa, x_axis_ordinate]):
+                    theta = atan2(x_axis_ordinate, x_axis_abscissa)
+                    rot_matrix = np.array([
+                        [cos(theta), -sin(theta), 0],
+                        [sin(theta),  cos(theta), 0],
+                        [0,           0,          1]
+                    ])
+                    # Applica rotazione e traslazione
+                    verts = np.dot(verts, rot_matrix.T)
+                    verts += np.array([easting, northing, orthogonal_height])
+                
+                # 5. Arrotondamento per pulizia
+                rounded_vertices = np.round(verts, decimals=5)
+                multipolygon_coords = []
+                
+                # Contatore per le facce degenerate
+                removed_faces_count = 0
+
+                for face in faces:
+                    coords = [tuple(rounded_vertices[idx]) for idx in face]
+                    # Salta facce degeneri (meno di 3 vertici unici)
+                    if len(set(coords)) < 3:
+                        removed_faces_count += 1
+                        continue
+                    # Chiudi il ring (primo vertice == ultimo vertice)
+                    if coords[0] != coords[-1]:
+                        coords.append(coords[0])
                     
-                success, gid, err = future.result()
-                if success:
-                    space_success_count += 1
+                    multipolygon_coords.append([coords])
+                
+                if removed_faces_count > 0:
+                    log_report.append(self.tr("\n--- Errore facce degenerate---\n"))
+                    log_report.append(self.tr("Rimosse {removed_faces_count} facce degenerate nell'elemento {class_name} (GlobalId: {global_id}).\n").format(
+                        removed_faces_count=removed_faces_count, class_name=class_name, global_id=global_id))
+                    log_report.append(self.tr("Gli elementi con facce degenerate potrebbero non essere visualizzati correttamente.\n"))
+
+                # 6. Creazione stringa WKT
+                if multipolygon_coords:
+                    wkt = "MULTIPOLYGON Z ("
+                    face_strings = []
+                    for poly in multipolygon_coords:
+                        ring_strings = []
+                        for ring in poly:
+                            ring_str = ", ".join(f"{x} {y} {z}" for x, y, z in ring)
+                            ring_strings.append(f"({ring_str})")
+                        face_strings.append(f"({', '.join(ring_strings)})")
+                    wkt += ", ".join(face_strings) + ")"
+                    
+                    element_wkts[(class_name, global_id)] = wkt
+                    successi += 1
                 else:
-                    space_failed_count += 1
-                    log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Conversione fallita per: {element_GID}\nErrore: {err}\n").format(element_GID=gid, err=err))
+                    element_wkts[(class_name, global_id)] = None
+                    fallimenti += 1
+                    dettaglio_fallimenti.append((class_name, global_id, self.tr("Geometria scartata, nessuna faccia valida.")))
+
+            except Exception as e:
+                # Geometria non esistente o errore di Open CASCADE
+                element_wkts[(class_name, global_id)] = None
+                fallimenti += 1
+
+                # Puliamo l'errore se è troppo lungo e lo aggiungiamo alla lista
+                error_msg = str(e).strip()
+                if not error_msg:
+                    error_msg = self.tr("Nessuna rappresentazione 3D trovata per questo elemento.")
+                
+                dettaglio_fallimenti.append((class_name, global_id, error_msg))
 
         if operation_aborted:
-            return False, log_report
-        
-        # --- RIEPILOGHI FINALI ---
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Riepilogo Conversione IfcSpace:"))
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "- Convertiti: {success_count}\n- Falliti: {failed_count}.\n").format(success_count=space_success_count, failed_count=space_failed_count))
+            return False, element_wkts, log_report
 
-        obj_files = [f for f in os.listdir(output_dir) if f.lower().endswith('.obj')]
-        converted_ids = {f.split('_', 2)[-1][:-4] for f in obj_files}
-        
-        not_converted = [(el.is_a(), el.GlobalId) for el in elements if el.is_a() not in skip_types and el.GlobalId not in converted_ids]
+        progress_dialog.setValue(total_elements)
 
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "\n---- RIEPILOGO FINALE ----\n"))
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "Totale file OBJ creati: {obj_count}\n").format(obj_count=len(obj_files)))
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "ATTENZIONE: Alcuni elementi (esempio: IfcStair, IfcRoof, IfcCurtainWall) potrebbero non avere una propria geometria e quindi non essere convertiti.\n"))
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "IfcElement NON convertiti (esclusi {nomi_esclusi}): {not_converted_count}\n").format(nomi_esclusi=nomi_esclusi, not_converted_count=len(not_converted)))
+        log_report.append(self.tr("\n--- Riepilogo Conversione ---\n"))
+        log_report.append(self.tr("Elementi elaborati con successo: {succ}").format(succ=successi))
+        log_report.append(self.tr("Elementi senza geometria o falliti: {fail}").format(fail=fallimenti))
         
-        if not_converted:
-            for class_name, gid in not_converted:
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "  -> Classe: {class_name}, GlobalId: {gid}\n").format(class_name=class_name, gid=gid))
+        if dettaglio_fallimenti:
+            log_report.append(self.tr("\n--- DETTAGLIO ERRORI E FALLIMENTI ---\n"))
+            log_report.append(self.tr("ATTENZIONE: Alcuni elementi (esempio: IfcStair, IfcRoof, IfcCurtainWall, ecc.) potrebbero non avere una propria geometria e quindi la conversione potrebbe fallire.\n"))
+            log_report.append(self.tr("Altri elementi invece potrebbero fallire per geometria difettosa.\n\n"))
 
-        space_not_converted = [(sp.is_a(), sp.GlobalId) for sp in space if sp.GlobalId not in converted_ids]
-        log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "IfcSpace NON convertiti: {space_not_converted_count}").format(space_not_converted_count=len(space_not_converted)))
-        if space_not_converted:
-            for class_name, gid in space_not_converted:
-                log_report.append(QCoreApplication.translate("convert_ifc_to_obj", "  -> Classe: {class_name}, GlobalId: {gid}\n").format(class_name=class_name, gid=gid))
-                
-        return True, log_report
-    
+
+            # Ordiniamo per classe per una lettura più chiara
+            dettaglio_fallimenti.sort(key=lambda x: x[0])
+            
+            for class_name, gid, err_msg in dettaglio_fallimenti:
+                log_report.append(self.tr("  -> Classe: {class_name} | GlobalId: {gid} | Errore: {err}\n").format(
+                    class_name=class_name, 
+                    gid=gid, 
+                    err=err_msg
+                ))
+
+        return True, element_wkts, log_report
+
+
+
+
+
+
     
     # funzione per estrarre il sistema di coordinate da un file IFC----------------------------------------------------------
     @staticmethod
@@ -1347,181 +1512,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         # Ritorna i valori estratti
         return epsg_code, easting, northing, orthogonal_height, x_axis_abscissa, x_axis_ordinate
 
-    # funzione per convertire i file OBJ in WKT----------------------------------------------------------
 
-    def convert_obj_to_wkt(self, output_dir, easting, northing, orthogonal_height, x_axis_abscissa, x_axis_ordinate):
-        """
-        Converte i file .obj in WKT 3D
-        """
-        
-        #self.iface.messageBar().pushMessage("Info", "Conversione OBJ -> WKT 3D in corso...", level=Qgis.Info, duration=3)
-        
-        # Lista per i messaggi di log
-        log_report = [self.tr("--- Conversione OBJ in WKT 3D ---\n")]
-
-        # Create a dictionary to associate each (class_name, GlobalId) with its WKT
-        element_wkts = {}
-
-        # Loop through all OBJ files generated in the output folder
-        obj_files = [f for f in os.listdir(output_dir) if f.lower().endswith('.obj')]
-
-        # --- QProgressDialog per questa fase ---
-        progress_dialog_wkt = QProgressDialog(
-            self.tr("Conversione OBJ in WKT 3D..."), 
-            self.tr("Annulla"), 
-            0, 
-            len(obj_files), 
-            self.iface.mainWindow()
-        )
-        progress_dialog_wkt.setWindowModality(Qt.WindowModal)
-
-        operation_aborted = False
-
-        for i, filename in enumerate(obj_files):
-            progress_dialog_wkt.setValue(i)
-            if progress_dialog_wkt.wasCanceled():
-                log_report.append(self.tr("OPERAZIONE ANNULLATA DALL'UTENTE"))
-                operation_aborted = True
-                break
-                
-            obj_file_path = os.path.join(output_dir, filename)
-            
-            # Extract the class name and GlobalId from the file name
-            base_name = os.path.splitext(filename)[0]
-            parts = base_name.split('_')
-            
-            if len(parts) >= 3:
-                idx = parts[0]
-                class_name = parts[1]
-                global_id = '_'.join(parts[2:])  # join the rest as GlobalId
-            elif len(parts) == 2:
-                class_name, global_id = parts
-            else:
-                class_name, global_id = None, base_name  # fallback
-            
-            if class_name is None:
-                log_report.append(self.tr("ATTENZIONE: Formato nome file non riconosciuto: {filename}. Saltato.").format(filename=filename))
-                continue
-
-            try:
-                # Load the OBJ file into a trimesh mesh object
-                mesh = trimesh.load_mesh(obj_file_path)
-                
-                if mesh.is_empty:
-                    log_report.append(self.tr("INFO: Mesh vuoto (nessuna geometria) per {global_id}. Saltato.").format(global_id=global_id))
-                    element_wkts[(class_name, global_id)] = None
-                    continue
-
-                # Extract faces and vertices
-                faces = mesh.faces
-                vertices = mesh.vertices
-                
-                # Apply rotation and translation if parameters are available
-                if (
-                    easting is not None and northing is not None and orthogonal_height is not None
-                    and x_axis_abscissa is not None and x_axis_ordinate is not None
-                ):
-                    # Compute rotation angle (theta) from XAxisAbscissa and XAxisOrdinate
-                    theta = atan2(x_axis_ordinate, x_axis_abscissa)
-                    # Build rotation matrix around Z axis
-                    rot_matrix = np.array([
-                        [cos(theta), -sin(theta), 0],
-                        [sin(theta),  cos(theta), 0],
-                        [0,           0,          1]
-                    ])
-                    # Apply rotation and translation to all vertices
-                    vertices = np.dot(vertices, rot_matrix.T)
-                    vertices += np.array([easting, northing, orthogonal_height])
-                
-                # Round the vertices to the fifth decimal place
-                rounded_vertices = np.round(vertices, decimals=5)
-                multipolygon_coords = []
-                removed_faces_count = 0
-                
-                for face in faces:
-                    # Get the 3D coordinates of the face's vertices
-                    coords = [tuple(rounded_vertices[idx]) for idx in face]
-                    # Ensure at least 3 unique vertices for a valid polygon
-                    if len(set(coords)) < 3:
-                        removed_faces_count += 1
-                        continue
-                    # Close the ring if not already closed
-                    if coords[0] != coords[-1]:
-                        coords.append(coords[0])
-                    # Each face is a polygon with one ring (no holes)
-                    multipolygon_coords.append([coords])
-                
-                # Sostituisco il print con il log
-                if removed_faces_count > 0:
-                    log_report.append(self.tr("{filename}: Rimosse {removed_faces_count} facce degenerate.").format(filename=filename, removed_faces_count=removed_faces_count))
-                
-                if multipolygon_coords:
-                    # Build the WKT MULTIPOLYGON Z string
-                    multipolygon_wkt = "MULTIPOLYGON Z ("
-                    face_strings = []
-                    for poly in multipolygon_coords:
-                        ring_strings = []
-                        for ring in poly:
-                            ring_str = ", ".join(f"{x} {y} {z}" for x, y, z in ring)
-                            ring_strings.append(f"({ring_str})")
-                        face_strings.append(f"({', '.join(ring_strings)})")
-                    multipolygon_wkt += ", ".join(face_strings) + ")"
-                    element_wkts[(class_name, global_id)] = multipolygon_wkt
-                else:
-                    log_report.append(self.tr("ATTENZIONE: Nessun WKT generato per {global_id} (0 facce valide).").format(global_id=global_id))
-                    element_wkts[(class_name, global_id)] = None
-
-            except Exception as e:
-                log_report.append(self.tr("ERRORE (trimesh/wkt) {global_id}: {error}").format(global_id=global_id, error=str(e)))
-                element_wkts[(class_name, global_id)] = None
-
-        progress_dialog_wkt.close()
-
-        if operation_aborted:
-            return False, element_wkts, log_report
-
-        # Clean up OBJ and MTL files if needed
-        log_report.append(self.tr("Pulizia file temporanei (.obj, .mtl) eseguita."))
-        for filename in os.listdir(output_dir):
-            if filename.lower().endswith(('.obj', '.mtl')):
-                file_path = os.path.join(output_dir, filename)
-                try:
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                except Exception as e:
-                    log_report.append(self.tr("ERRORE pulizia: Impossibile rimuovere {filename}: {error}").format(filename=filename, error=str(e)))
-
-        # riepilogo nel log
-        log_report.append(self.tr("\n\n--- Riepilogo Conversione WKT ---\n"))
-        wkt_count = 0
-        failed_items = [] # Lista per raccogliere solo i fallimenti
-
-        for (class_name, global_id), wkt in element_wkts.items():
-            if wkt:
-                # Se il WKT è stato generato, incrementa solo il contatore
-                wkt_count += 1
-            else:
-                # Se il WKT non è stato generato, aggiungilo alla lista dei fallimenti
-                failed_items.append(self.tr("{class_name} ({global_id}): Nessun WKT generato.").format(class_name=class_name, global_id=global_id))
-
-        # 1. Calcola il totale
-        total_items = len(element_wkts)
-
-        # 2. Inserisci il riepilogo principale IN ALTO
-        #    (Il '1' lo mette dopo "--- Inizio Conversione WKT 3D ---")
-        log_report.insert(1, self.tr("Conversione WKT completata: {wkt_count} su {total_items} elementi processati.\n").format(wkt_count=wkt_count, total_items=total_items))
-
-        # 3. Aggiungi la sezione dei fallimenti ALLA FINE, solo se necessario.
-        if failed_items:
-            log_report.append(self.tr("\n\n--- Dettaglio Elementi non generati ({failed_count}) ---\n").format(failed_count=len(failed_items)))
-            log_report.extend(failed_items)
-        elif total_items > 0:
-            # Questa 'else' ora ha senso, perché non è più ridondante
-            log_report.append(self.tr("Tutti gli elementi sono stati convertiti con successo."))
-        
-        # Restituisce il dizionario WKT e il report
-        return True, element_wkts, log_report
-    
 
     # Funzione per inserire i WKT in PostgreSQL----------------------------------------------------------
 
@@ -1537,15 +1528,31 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         # Stato dell'operazione, default a False
         success = False
         
+        # Creiamo e mostriamo SUBITO la barra di caricamento
+        total_items = len(element_wkts)
+        progress_dialog_db = QProgressDialog(
+            self.tr("Connessione e preparazione dati in corso..."), # Testo iniziale
+            self.tr("Annulla"), 
+            0, 
+            total_items, 
+            self.iface.mainWindow()
+        )
+        progress_dialog_db.setWindowTitle(self.tr("Inserimento Database"))
+        progress_dialog_db.setWindowModality(Qt.WindowModal)
+        progress_dialog_db.setMinimumDuration(0) # Elimina ritardi Qt
+        progress_dialog_db.show()                # Mostra la finestra
+        QApplication.processEvents()             # Forza QGIS a disegnarla immediatamente
+
+
         try:
             #self.iface.messageBar().pushMessage("Info", "Connessione a PostgreSQL...", level=Qgis.Info, duration=3)
             # Connect to the PostgreSQL database
             conn = psycopg2.connect(**db_params)
             cursor = conn.cursor()
-            log_report.append(self.tr("Connessione stabilita. Inserimento dati per Progetto: '{project_name}' (ID: {project_id})").format(project_name=project_name, project_id=project_id))
+            log_report.append(self.tr("Inserimento dati per Progetto:\n'{project_name}' (ID: {project_id})").format(project_name=project_name, project_id=project_id))
 
             # --- Recupera i mapping per QUESTO specifico ProjectId ---
-            log_report.append(self.tr("Recupero mapping GlobalId per ProjectId {project_id}\n").format(project_id=project_id))
+            #log_report.append(self.tr("\nRecupero mapping GlobalId per ProjectId {project_id}\n").format(project_id=project_id))
 
             # Estraiamo tutti i GlobalId necessari dal dizionario degli elementi
             global_ids = [gid for cls, gid in element_wkts.keys()]
@@ -1582,20 +1589,13 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             if not value_to_entityid:
                 log_report.append(self.tr("ATTENZIONE: Nessun mapping GlobalId trovato."))
 
-
-            # --- QProgressDialog per il Database ---
-            total_items = len(element_wkts)
-            progress_dialog_db = QProgressDialog(
-                self.tr("Inserimento geometrie nel Database..."), 
-                self.tr("Annulla"), 
-                0, 
-                total_items, 
-                self.iface.mainWindow()
-            )
-            progress_dialog_db.setWindowModality(Qt.WindowModal)
-
             # --- Insert data into postgres ---
-            log_report.append(self.tr("Inserimento geometrie in 'ifcgeometry.entitygeometry'\n"))
+            log_report.append(self.tr("\nInserimento geometrie in 'ifcgeometry.entitygeometry'\n"))
+           
+            # Aggiorniamo il testo della barra per la nuova fase
+            progress_dialog_db.setLabelText(self.tr("Inserimento geometrie nel Database..."))
+            QApplication.processEvents()
+            
             inserted_count = 0
             skipped_count = 0
             failed_count = 0
@@ -1661,7 +1661,6 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             conn.commit()
             
             log_report.append(self.tr("Righe inserite con successo: {inserted_count}\n").format(inserted_count=inserted_count))
-            log_report.append(self.tr("Elementi saltati (senza WKT): {skipped_count}").format(skipped_count=skipped_count))
             log_report.append(self.tr("Inserimenti falliti (errore): {failed_count}\n").format(failed_count=failed_count))
 
             # Definiamo il successo: Solo se non ci sono stati errori di inserimento
@@ -1704,7 +1703,6 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
 
         dependencies = {
             'ifcopenshell': 'ifcopenshell',
-            'trimesh': 'trimesh',
             'numpy': 'numpy',
             'psycopg2': 'psycopg2-binary', 
             'pyodbc': 'pyodbc'
@@ -1776,6 +1774,9 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
 
                 # Importa dinamicamente il modulo
                 globals()[import_name] = importlib.import_module(import_name)
+
+                if import_name == 'ifcopenshell':
+                    importlib.import_module('ifcopenshell.geom')
                 
                 if import_name == 'pyodbc':
                     try: globals()['pyodbc'].pooling = False
@@ -1783,7 +1784,6 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
 
                 # Aggiorna i flag globali
                 if import_name == 'ifcopenshell': globals()['IFCOPENSHELL_PRESENTE'] = True
-                elif import_name == 'trimesh': globals()['TRIMESH_PRESENTE'] = True
                 elif import_name == 'numpy': globals()['NUMPY_PRESENTE'] = True
                 elif import_name == 'psycopg2': globals()['PSYCOPG2_PRESENTE'] = True
                 elif import_name == 'pyodbc': globals()['PYODBC_PRESENTE'] = True
@@ -1817,77 +1817,12 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
 
         ifc_file_path = self.selected_ifc_PostgreSQL
 
-        # Ottiene la cartella dove risiede questo file python (la root del plugin)
-        plugin_dir = os.path.dirname(__file__) 
-
-
-        # 2. Percorso relativo per IfcConvert
-        ifcconvert_dir = os.path.join(plugin_dir, "IfcConvert")
-        ifcconvert_path = os.path.join(ifcconvert_dir, "IfcConvert.exe")
-
-        # Se l'eseguibile non esiste, cerchiamo se c'è uno zip da estrarre
-        if not os.path.exists(ifcconvert_path):
-            if os.path.exists(ifcconvert_dir):
-                # Cerca tutti i file .zip nella cartella IfcConvert
-                zip_files = [f for f in os.listdir(ifcconvert_dir) if f.lower().endswith('.zip')]
-                
-                if zip_files:
-                    zip_path = os.path.join(ifcconvert_dir, zip_files[0]) # Prende il primo zip trovato
-                    
-                    # Log per l'utente (opzionale: puoi anche mostrare un QMessageBox temporaneo)
-                    self.log_info(("IfcConvert.exe non trovato. Estrazione di {zip_file} in corso..."))
-                    
-                    try:
-                        # Estrae il contenuto dello zip nella stessa cartella
-                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                            zip_ref.extractall(ifcconvert_dir)
-                        self.log_info(("Estrazione completata con successo."))
-                    except Exception as e:
-                        QMessageBox.critical(
-                            self, 
-                            self.tr("Errore Estrazione"), 
-                            self.tr("Impossibile estrarre il file zip di IfcConvert:\n{e}\n\nEstrai il file manualmente.").format(e=str(e))
-                        )
-                        return
-
-
-        # Controllo esistenza IfcConvert
-        if not os.path.exists(ifcconvert_path):
-            QMessageBox.critical(
-                self, 
-                self.tr("Errore Configurazione"), 
-                self.tr("IfcConvert non trovato!\n\nIl plugin si aspetta di trovare l'exe qui:\n{ifcconvert_path}\n\nAssicurati di avere 'IfcConvert' dentro la cartella del plugin.").format(ifcconvert_path=ifcconvert_path)
-            )
-            return
-
-        # 3. Percorso relativo per output OBJ
-        # Crea/Usa la cartella: CartellaPlugin/OBJ_files
-        output_dir = os.path.join(plugin_dir, "OBJ_files")
-        # Crea la cartella se non esiste
-        os.makedirs(output_dir, exist_ok=True)
-
-        # --- PULIZIA PRELIMINARE CARTELLA OBJ ---
-        # Rimuove eventuali file residui da esecuzioni interrotte
-        try:
-            for filename in os.listdir(output_dir):
-                file_path = os.path.join(output_dir, filename)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-        except Exception as e:
-            QMessageBox.critical(
-                self, 
-                self.tr("Errore Pulizia"), 
-                self.tr("Impossibile svuotare la cartella OBJ_files:\n{e}\n\nElimina manualmente i file nella cartella 'OBJ_files' e riprova.").format(e=e)
-            )
-            return # Interrompe la procedura
-        
         # Controlla e installa automaticamente le librerie mancanti
         if not self.check_and_install_dependencies():
-            return # Ferma l'esecuzione se l'utente annulla o se c'è un errore di installazione
+            return 
 
-        # 4. Carica il file IFC
+        # 2. Carica il file IFC
         try:
-            #self.iface.messageBar().pushMessage("Info", "Caricamento file IFC...", level=Qgis.Info, duration=3)
             ifc = ifcopenshell.open(ifc_file_path)
         except Exception as e:
             QMessageBox.critical(self, self.tr("Errore"), self.tr("Impossibile aprire il file IFC:\n{e}").format(e=e))
@@ -1896,89 +1831,58 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
         # --- ESTRAZIONE DATI GEOREFERENZIAZIONE ---
         try:
             epsg_code, easting, northing, orthogonal_height, x_axis_abscissa, x_axis_ordinate = self.extract_IFC_CRS(ifc)
-            #self.iface.messageBar().pushMessage("Info", f"Dati CRS estratti. EPSG: {epsg_code}", level=Qgis.Info, duration=4)
         except Exception as e:
             QMessageBox.critical(self, self.tr("Errore"), self.tr("Impossibile estrarre i dati CRS: {e}").format(e=e))
             return
         
-        # Contiamo gli elementi PRIMA di iniziare per sapere il totale
+        # Filtriamo gli elementi
         elements = ifc.by_type("IfcElement")
         spaces = ifc.by_type("IfcSpace")
-
-        # NUOVO: Filtriamo gli elementi che sappiamo verranno ignorati
         skip_types = {"IfcOpeningElement"}
         elements_to_convert = [el for el in elements if el.is_a() not in skip_types]
+        spaces_to_convert = [sp for sp in spaces if sp.is_a() not in skip_types]
         
-        # Calcoliamo il totale solo sugli elementi effettivi
-        total_steps = len(elements_to_convert) + len(spaces)
+        total_steps = len(elements_to_convert) + len(spaces_to_convert)
         
         if total_steps == 0:
-            QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Nessun IfcElement o IfcSpace trovato nel file IFC."))
+            QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Nessun IfcElement o IfcSpace valido trovato nel file IFC."))
             return
 
-        # Nascodiamo la finestra principale per evitare che compaia tra le procedure
+        # Nascondiamo la finestra principale
         self.hide()
 
         # Creiamo e configuriamo la QProgressDialog
         progress_dialog = QProgressDialog(
-            self.tr("Conversione IFC in OBJ in corso...\nSe gli elementi IFC sono molti, la conversione potrebbe richiedere molto tempo. Attendere..."), 
+            self.tr("Estrazione geometria IFC e generazione WKT in corso...\nAttendere prego..."), 
             self.tr("Annulla"), 
             0, 
             total_steps, 
             self.iface.mainWindow()
         )
+        progress_dialog.setWindowTitle(self.tr("Conversione IFC in WKT"))
         progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setMinimumDuration(0)
         progress_dialog.show()
 
-        # =================================
-        # FASE 1: CONVERSIONE IFC -> OBJ
-        # =================================
-        try:
-            success_obj, log_report_obj = self.convert_ifc_to_obj(
-                ifc, elements, spaces, ifcconvert_path, output_dir, progress_dialog, ifc_file_path)
-            # Chiudiamo la barra di avanzamento
-            progress_dialog.close()
-
-            # Mostra Riepilogo OBJ
-            summary_message_OBJ = "\n".join(log_report_obj)
-            msgBox_OBJ = QMessageBox(self.iface.mainWindow())
-            msgBox_OBJ.setWindowTitle(self.tr("Riepilogo Conversione OBJ"))
-            msgBox_OBJ.setDetailedText(summary_message_OBJ)
-
-            if not success_obj:
-                msgBox_OBJ.setText(self.tr("Conversione OBJ Interrotta o Fallita."))
-                msgBox_OBJ.setIcon(QMessageBox.Critical)
-                msgBox_OBJ.exec_()
-                return # STOP procedura
-
-            msgBox_OBJ.setText(self.tr("Conversione OBJ completata."))
-            msgBox_OBJ.setIcon(QMessageBox.Information)
-            msgBox_OBJ.setStandardButtons(QMessageBox.Ok)
-            # Usiamo setDetailedText per avere un testo scrollabile
-            msgBox_OBJ.setDetailedText(summary_message_OBJ)
-            msgBox_OBJ.exec_()
-
-        except Exception as e:
-            progress_dialog.close()
-            QMessageBox.critical(self, self.tr("Errore Critico OBJ"), self.tr("Errore durante conversione OBJ:\n{e}").format(e=e))
-            self.close()
-            return
-
         # ============================================
-        # FASE 2: CONVERSIONE OBJ -> WKT
-        # =============================================
+        # FASE UNICA: ESTRAZIONE GEOMETRIA E CREAZIONE WKT
+        # ============================================
         try:
-            success_wkt, element_wkts, log_report_wkt = self.convert_obj_to_wkt(
-                output_dir, easting, northing, orthogonal_height, x_axis_abscissa, x_axis_ordinate
+            success_wkt, element_wkts, log_report_wkt = self.convert_ifc_to_wkt_in_memory(
+                elements_to_convert, spaces_to_convert, 
+                easting, northing, orthogonal_height, x_axis_abscissa, x_axis_ordinate, 
+                progress_dialog
             )
             
+            progress_dialog.close()
+
             summary_message_wkt = "\n".join(log_report_wkt)
             msgBox_wkt = QMessageBox(self.iface.mainWindow())
             msgBox_wkt.setWindowTitle(self.tr("Riepilogo Conversione WKT"))
             msgBox_wkt.setDetailedText(summary_message_wkt)
 
             if not success_wkt:
-                msgBox_wkt.setText(self.tr("Conversione WKT Interrotta o Fallita."))
+                msgBox_wkt.setText(self.tr("Conversione Interrotta o Fallita."))
                 msgBox_wkt.setIcon(QMessageBox.Critical)
                 msgBox_wkt.exec_()
                 return # STOP procedura
@@ -1989,19 +1893,19 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
                 msgBox_wkt.exec_()
                 return # STOP procedura
 
-            msgBox_wkt.setText(self.tr("Conversione WKT completata. {element_wkts} elementi pronti.").format(element_wkts=len(element_wkts)))
+            msgBox_wkt.setText(self.tr("Conversione WKT completata con successo."))
             msgBox_wkt.setIcon(QMessageBox.Information)
             msgBox_wkt.setStandardButtons(QMessageBox.Ok)
-            msgBox_wkt.setDetailedText(summary_message_wkt)
             msgBox_wkt.exec_()
 
         except Exception as e:
-            QMessageBox.critical(self, self.tr("Errore Critico WKT"), self.tr("Errore durante conversione WKT:\n{e}").format(e=e))
+            progress_dialog.close()
+            QMessageBox.critical(self, self.tr("Errore Critico Conversione"), self.tr("Errore durante elaborazione geometrica:\n{e}").format(e=e))
             self.close()
             return
 
         # ========================================
-        # FASE 3: INSERIMENTO POSTGRESQL
+        # INSERIMENTO POSTGRESQL
         # ========================================
         try:
             if not hasattr(self, '_postgresql_conn_params'):
@@ -2011,6 +1915,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             host, dbname, user, password, port = self._postgresql_conn_params
             db_params = {"host": host, "dbname": dbname, "user": user, "password": password, "port": port}
             
+            # Qui passi `element_wkts` esattamente come facevi prima!
             success_db, log_report_db = self.insert_wkt_to_postgresql(
                 db_params, element_wkts, epsg_code, project_id, project_name
             )
@@ -2023,15 +1928,12 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             if success_db:
                 msgBox_db.setText(self.tr("Procedura completata con SUCCESSO."))
                 msgBox_db.setIcon(QMessageBox.Information)
-
                 self.import_completed.emit()
-
             else:
                 msgBox_db.setText(self.tr("Procedura completata PARZIALMENTE (o interrotta).\nControlla i dettagli per gli errori."))
                 msgBox_db.setIcon(QMessageBox.Warning)
             
             msgBox_db.setStandardButtons(QMessageBox.Ok)
-            msgBox_db.setDetailedText(summary_message_db)
             msgBox_db.exec_()
             
             self.close()
@@ -2041,8 +1943,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             self.close()
             return
         
-
-        # --- AGGIORNAMENTO MV dei progetti importati in postgres IN BACKGROUND ---
+        # --- AGGIORNAMENTO MV dei progetti in BACKGROUND ---
         def refresh_mv_task(params):
             try:
                 conn = psycopg2.connect(
@@ -2050,8 +1951,6 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
                     user=params[2], password=params[3], port=params[4]
                 )
                 cur = conn.cursor()
-                # Usiamo CONCURRENTLY così se l'utente apre subito la Query Tab 
-                # può comunque leggere i vecchi dati mentre i nuovi arrivano
                 cur.execute('REFRESH MATERIALIZED VIEW CONCURRENTLY ifcproject.projectpostgres;')
                 conn.commit()
                 cur.close()
@@ -2060,14 +1959,11 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
             except Exception as e:
                 QgsMessageLog.logMessage(f"Refresh MV fallito: {e}", "ifcSQL", Qgis.Critical)
 
-        # Lancio il thread e proseguo subito alla chiusura della finestra
         if success_db:
             t = threading.Thread(target=refresh_mv_task, args=(self._postgresql_conn_params,))
             t.start()
             
         self.close()
-
-
 
 
 
@@ -4035,14 +3931,6 @@ class QueryDialog(Ui_Query, QDockWidget):
             QMessageBox.information(self, self.tr("Reset"), self.tr("Tutti i filtri sono stati reimpostati allo stato iniziale."))
 
     
-    
-
-
-
-
-
-
-
 
 
 
@@ -4102,6 +3990,20 @@ class AreaSelectorTool(QgsMapToolEmitPoint):
         if len(self.points) < 3:
             return None
         return self.rubberBand.asGeometry()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
