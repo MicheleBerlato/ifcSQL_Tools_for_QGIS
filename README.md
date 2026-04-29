@@ -90,7 +90,7 @@ Once the data has been imported (MSSQL + PostgreSQL), you can easily view your I
 <br><br> ![GIF 3Dmapview](github_images/10_3Dmapview.gif) <br><br>
 
 
-## 📋 Summary of the folders you will find in the repository
+# 📋 Summary of the folders you will find in the repository
 - first_installation = folder containing the files needed to install and set up the plugin;
 - github_images = folder containing the images shown in the GitHub readme;
 - i18n = folder containing the translation of the plugin into English;
