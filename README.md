@@ -16,7 +16,7 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 
 > [!NOTE]
 > 
-> Currently, the plugin is designed to work only on Windows and with QGIS 3.
+> Currently, the plugin is designed to work only on Windows and with QGIS 3.40-3.44
 >
 <br><br>
 
