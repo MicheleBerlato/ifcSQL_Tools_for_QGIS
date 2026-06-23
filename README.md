@@ -45,7 +45,7 @@ Below is an example of a wastewater treatment plant consisting of 21 IFC files. 
 <br><br> ![Screenshot Connect_postgres](github_images/05.1_Connect_postgres.png) <br><br>
 
 
-### (1) You can import an IFC file using the **`“Import IFC file”`** button. 
+### (1) You can import an IFC file using the “Import IFC file” button. 
 Remember that you must import the file first into MSSQL and then into PostgreSQL for the process to be complete. If you need help georeferencing an IFC model, see: https://ifcgref.bk.tudelft.nl/. The steps to follow (for both databases) are:
 - Select an existing connection or create a new one.
 - Connect to the selected database.
@@ -74,15 +74,21 @@ The file will be deleted from both databases or only from MSSQL if it has not al
 
 ### (3) You can filter IFC geometries using the “IFC Filter” button. 
 You can filter the IFC geometries in your database by following these steps:
-- Select an existing connection.
-- Connect to the database.
+- Select the existing connections.
+- Connect to the databases.
 - Decide whether to use both the context filter and the IFC filter (you can disable one of them).
 - In the context filter, you can select three types of filters: “default filter” if you have geographical areas loaded in your database; “manual filter” if you want to draw the area extents; “project filter” if you want to filter by a specific IFC file.
-- In the IFC filter, you can select three types of filters: "IFC Class Filter" if you want to filter by class or classes; "IFC Building Storey Filter" if you want to filter by Building Storey; "IFC Class and Building Storey Filter"  if you want to filter by Building Storey and then by class or classes.
+- In the IFC filter, you can select three types of filters: "IFC Class Filter" if you want to filter by Class; "IFC Building Storey Filter" if you want to filter by Building Storey; "IFC Class and Building Storey Filter"  if you want to filter by Building Storey and then by Class.
 - Apply filter.
-<br><br> ![Screenshot IFCquery](github_images/09_IFCquery.png) <br><br>
+<br><br> ![Screenshot IFCquery](github_images/09_IFCFilter.gif) <br><br>
 
-### (4) You can query
+### (4) You can query IFC elements using the “IFC Query” button. 
+You can query the IFC elements in your database by following these steps:
+- Select the existing connections.
+- Connect to the databases.
+- Select an element.
+- Read its attributes and properties.
+<br><br> ![Screenshot IFCquery](github_images/10_IFCQuery.gif) <br><br>
 
 
 # 🔍 How to view imported geometries?
@@ -93,7 +99,7 @@ Once the data has been imported (MSSQL + PostgreSQL), you can easily view your I
 - Access the layer properties and enable the 3D view representation.
 - Click the "3D map view" button.
 
-<br><br> ![GIF 3Dmapview](github_images/10_3Dmapview.gif) <br><br>
+<br><br> ![GIF 3Dmapview](github_images/11_3Dmapview.gif) <br><br>
 
 
 # 📁 Folders Contents
