@@ -5057,11 +5057,23 @@ class IFCPropertiesDialog(Ui_QueryProperties, QDockWidget):
         self.lineEdit_CercaProprieta.clear()
         self.treeWidget.clear()
 
-        # Deseleziona eventuali selezioni attive sulla mappa
-        if self.current_layer:
-            self.current_layer.removeSelection()
-        elif self.iface.activeLayer():
-            self.iface.activeLayer().removeSelection()
+        # Deseleziona eventuali selezioni attive sulla mappa gestendo la cancellazione del layer C++
+        try:
+            if self.current_layer:
+                self.current_layer.removeSelection()
+        except RuntimeError:
+            # Il layer C++ è stato eliminato da QGIS, resettiamo il puntatore Python
+            self.current_layer = None
+
+        # Se non c'era un layer registrato (o se è stato eliminato), proviamo con l'activeLayer corrente
+        if not self.current_layer:
+            try:
+                active_layer = self.iface.activeLayer()
+                if active_layer:
+                    active_layer.removeSelection()
+            except RuntimeError:
+                pass
+
 
     def closeEvent(self, event):
         # Svuota l'albero, pulisce la ricerca e deseleziona l'oggetto dalla mappa
