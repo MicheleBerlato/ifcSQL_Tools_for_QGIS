@@ -5057,22 +5057,17 @@ class IFCPropertiesDialog(Ui_QueryProperties, QDockWidget):
         self.lineEdit_CercaProprieta.clear()
         self.treeWidget.clear()
 
-        # Deseleziona eventuali selezioni attive sulla mappa gestendo la cancellazione del layer C++
-        try:
-            if self.current_layer:
-                self.current_layer.removeSelection()
-        except RuntimeError:
-            # Il layer C++ è stato eliminato da QGIS, resettiamo il puntatore Python
-            self.current_layer = None
+        # PULIZIA GLOBALE: Rimuove la selezione da TUTTI i layer del progetto
+        for lyr in QgsProject.instance().mapLayers().values():
+            if isinstance(lyr, QgsVectorLayer):
+                try:
+                    lyr.removeSelection()
+                except RuntimeError:
+                    # Gestisce il caso in cui un layer sia stato rimosso ma sia ancora in memoria
+                    pass
 
-        # Se non c'era un layer registrato (o se è stato eliminato), proviamo con l'activeLayer corrente
-        if not self.current_layer:
-            try:
-                active_layer = self.iface.activeLayer()
-                if active_layer:
-                    active_layer.removeSelection()
-            except RuntimeError:
-                pass
+        # Resetta il riferimento al layer corrente
+        self.current_layer = None
 
 
     def closeEvent(self, event):
@@ -6079,6 +6074,12 @@ class IFCSelectionTool(QgsMapTool):
 
         
         # SELEZIONE E REPAINT IMMEDIATO
+        
+        # PULIZIA GLOBALE: Rimuove la selezione da TUTTI i layer del progetto
+        for lyr in QgsProject.instance().mapLayers().values():
+            if isinstance(lyr, QgsVectorLayer):
+                lyr.removeSelection()
+
         # Selezioniamo subito l'elemento e forziamo la GUI a processare l'evento grafico.
         # In questo modo si colorerà di giallo ISTANTANEAMENTE, anche se le query successive falliscono.
         layer.selectByIds([target_feature.id()])
