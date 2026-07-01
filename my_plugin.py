@@ -1,14 +1,14 @@
 # Importa librerie di QGIS
-from qgis.PyQt.QtWidgets import QAction, QMenu, QMessageBox, QDialog, QAbstractItemView, QMainWindow, QFileDialog, QProgressDialog, QApplication, QDockWidget, QListWidgetItem, QDockWidget, QToolBar, QCheckBox, QVBoxLayout, QLabel, QDialogButtonBox
-from qgis.PyQt.QtGui import QIcon, QColor, QStandardItemModel, QStandardItem
-from qgis.PyQt.QtCore import QSettings, Qt, QSortFilterProxyModel, pyqtSignal, QCoreApplication, QTranslator, QThread
-from qgis.core import Qgis, QgsMessageLog, QgsVectorLayer, QgsDataSourceUri, QgsProject, QgsWkbTypes, QgsFeature
-from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker, QgsMapCanvas, QgsMapToolPan, QgsMapToolExtent
-
+from qgis.PyQt.QtWidgets import QAction, QMenu, QMessageBox, QDialog, QAbstractItemView, QMainWindow, QFileDialog, QProgressDialog, QApplication, QDockWidget, QListWidgetItem, QCheckBox, QTreeWidgetItem, QVBoxLayout, QDialogButtonBox, QTextEdit, QHeaderView
+from qgis.PyQt.QtGui import QIcon, QColor, QStandardItemModel, QStandardItem, QFont
+from qgis.PyQt.QtCore import QSettings, Qt, QSortFilterProxyModel, pyqtSignal, QCoreApplication, QTranslator, QThread, QTimer
+from qgis.core import Qgis, QgsMessageLog, QgsVectorLayer, QgsDataSourceUri, QgsProject, QgsWkbTypes, QgsFeature, QgsRectangle, QgsFeatureRequest, NULL, QgsGeometry
+from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker, QgsMapCanvas, QgsMapToolPan, QgsMapToolExtent, QgsMapTool
 from qgis._3d import Qgs3DMapCanvas, Qgs3DMapSettings
 
 
-# Importa librerie standard di Pytho
+
+# Importa librerie standard di Python
 import os
 import re
 import subprocess
@@ -66,8 +66,9 @@ except ImportError:
 # Importa le interfacce grafiche generate da Qt Designer
 from .UIs.ImportaIFC import Ui_InserisciFileIFC
 from .UIs.EliminaIFC import Ui_EliminaProgettoIFC
-from .UIs.DockQuery import Ui_Query
+from .UIs.DockFilter import Ui_Filter
 from .UIs.SelezionaProgettoDaEliminare import Ui_SelezionaProgetto
+from .UIs.DockQueryProperties import Ui_QueryProperties
 
 
 
@@ -190,13 +191,16 @@ class MyPlugin:
         self.delete_dialog = None
         self.insert_dialog = None
         self.query_dialog = None   
+        self.properties_dialog = None
 
         # Inizializza le azioni del menu e della toolbar
         self.action1 = None
         self.action2 = None
         self.action3 = None
         self.action4 = None
+        self.action_properties = None
         self.action5 = None
+        
 
         # Variabile per tracciare il canvas 3D
         self.canvas_3d = None
@@ -240,10 +244,15 @@ class MyPlugin:
             old_dock.deleteLater()                # Lo elimina dalla memoria
 
         # Pulsante 4
-        self.action4 = QAction(QIcon(os.path.join(plugin_directory, 'icons', 'icon_query2.png')), self.tr("Query IFC"), self.iface.mainWindow())
+        self.action4 = QAction(QIcon(os.path.join(plugin_directory, 'icons', 'icon_filter.png')), self.tr("IFC filter"), self.iface.mainWindow())
         self.action4.setCheckable(True) 
         self.menu.addAction(self.action4)
         self.action4.triggered.connect(self.run_query)
+
+        # Pulsante 6
+        self.action_properties = QAction(QIcon(os.path.join(plugin_directory, 'icons', 'icon_query2.png')), self.tr("Interroga elemento IFC"), self.iface.mainWindow())
+        self.menu.addAction(self.action_properties)
+        self.action_properties.triggered.connect(self.run_properties)
 
         # Pulsante 5
         self.action5 = QAction(QIcon(os.path.join(plugin_directory, 'icons', 'icon_3dmap.png')), self.tr("3D Map View"), self.iface.mainWindow())
@@ -262,6 +271,7 @@ class MyPlugin:
         self.toolbar.addAction(self.action2)
         #self.toolbar.addAction(self.action3)
         self.toolbar.addAction(self.action4)
+        self.toolbar.addAction(self.action_properties)
         self.toolbar.addAction(self.action5)
 
     # Rimuovi l'interfaccia grafica del plugin    
@@ -272,6 +282,12 @@ class MyPlugin:
             self.iface.removeDockWidget(self.query_dialog)
             self.query_dialog.deleteLater()
             self.query_dialog = None
+        
+        # 2. Rimuovi il Dock delle proprietà se esiste
+        if self.properties_dialog:
+            self.iface.removeDockWidget(self.properties_dialog)
+            self.properties_dialog.deleteLater()
+            self.properties_dialog = None
         
         # Rimuovi tutto dal menu e dalla toolbar
         if self.menu:
@@ -305,18 +321,13 @@ class MyPlugin:
         if self.query_dialog:
             # Usa il metodo che resetta tutto come se si cambiasse DB
             self.query_dialog.reset_ui_on_connection_change_PostgreSQL_Query()
-    
+            self.query_dialog.reset_ui_on_connection_change_MSSQL_Query()
+
     def run_query(self, checked):
         # --- 1. CREAZIONE E CONFIGURAZIONE INIZIALE ---
         if not self.query_dialog:
             self.query_dialog = QueryDialog(self.iface, parent=self.iface.mainWindow())
             self.query_dialog.setObjectName("IfcSqlQueryDock") 
-            
-            # [FIX DIMENSIONI] Impostiamo una dimensione minima gestibile
-            # Questo impedisce che la finestra "esploda" verso il basso
-            self.query_dialog.setMinimumWidth(300)
-            self.query_dialog.setMinimumHeight(200)
-            self.query_dialog.resize(350, 400) # Una dimensione di partenza ragionevole
             
             # Aggiungiamo il widget (inizialmente nascosto o visibile a seconda di checked)
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.query_dialog)
@@ -324,6 +335,7 @@ class MyPlugin:
             # Collega eventi
             self.query_dialog.visibilityChanged.connect(self.action4.setChecked)
             self.query_dialog.populate_connection_combo_PostgreSQL_Query()
+            self.query_dialog.populate_connection_combo_MSSQL_Query()
 
         # --- 2. GESTIONE VISIBILITÀ E SCHEDE (Eseguito a ogni click) ---
         if checked:
@@ -377,14 +389,62 @@ class MyPlugin:
         # C. Eseguiamo l'aggancio
         if target_dock:
             mainWindow.tabifyDockWidget(target_dock, self.query_dialog)
+    
+
+    def force_tabify_properties_dock(self):
+        """
+        Cerca il pannello Query o un altro pannello a destra e forza 
+        la creazione delle schede (Tabs) per il pannello proprietà.
+        """
+        mainWindow = self.iface.mainWindow()
+        
+        # Se il pannello è già inserito in una scheda, non fare nulla
+        if mainWindow.tabifiedDockWidgets(self.properties_dialog):
+            return
+
+        target_dock = None
+        
+        # Priorità 1: Se il pannello Query (Filtro IFC) è aperto a destra, ci agganciamo a lui
+        if self.query_dialog and self.query_dialog.isVisible() and not self.query_dialog.isFloating():
+            if mainWindow.dockWidgetArea(self.query_dialog) == Qt.RightDockWidgetArea:
+                target_dock = self.query_dialog
+                
+        # Priorità 2: Se il pannello query è chiuso, cerchiamo i pannelli standard di QGIS
+        if not target_dock:
+            priority_docks = ["IdentifyResults", "LayerOrder", "StatisticsDockWidget", "AdvancedDigitizingPanel"]
+            for name in priority_docks:
+                dock = mainWindow.findChild(QDockWidget, name)
+                if (dock and dock.isVisible() and not dock.isFloating() and 
+                    mainWindow.dockWidgetArea(dock) == Qt.RightDockWidgetArea):
+                    target_dock = dock
+                    break
+                    
+        # Eseguiamo l'aggancio a schede
+        if target_dock:
+            mainWindow.tabifyDockWidget(target_dock, self.properties_dialog)
+
+
+
 
 
 
     #-----------------------------------------------
+    # Gestione mappa 3D
 
     def run_3dmap(self):
         """Fase 1: Attiva lo strumento per disegnare il ritaglio sulla mappa 2D"""
         
+        # --- BLOCCO: una sola vista 3D del plugin alla volta ---
+        if getattr(self, 'canvas_3d', None) is not None:
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "3D Map View",
+                self.tr("C'è già una mappa 3D aperta creata con questo strumento.\n\n"
+                        "Chiudi prima la vista \"IFC 3D View\" esistente per "
+                        "ripristinare i filtri, poi potrai crearne una nuova.")
+            )
+            return
+
         # 1. Creiamo la spunta (CheckBox)
         self.cb_nascondi_space = QCheckBox(self.tr("Nascondi i volumi degli IfcSpace."))
         self.cb_nascondi_space.setChecked(True) # Selezionato di default
@@ -442,29 +502,49 @@ class MyPlugin:
                 self.tr("Clic singolo rilevato. Devi cliccare e trascinare per disegnare un rettangolo.\n\nOperazione annullata."),
             )
             return # Esce dalla funzione senza creare la mappa 3D
+
+        # --- 2.5 PULIZIA DI UNA EVENTUALE VISTA 3D PRECEDENTE ---
+        if getattr(self, 'canvas_3d', None) is not None:
+            try:
+                self.canvas_3d.destroyed.disconnect()
+            except (TypeError, RuntimeError):
+                pass  
+        self.ripristina_filtri_ifcspace(mostra_messaggio=False)
+
         
         # --- 3. APPLICAZIONE FILTRO TEMPORANEO ---
         # Creiamo un dizionario per salvare i filtri precedenti prima di modificarli
-        self.filtri_originali_3d = {}
-        
+        if not hasattr(self, 'filtri_originali_3d') or self.filtri_originali_3d is None:
+            self.filtri_originali_3d = {}
+
         if getattr(self, 'nascondi_ifcspace', False):
+            filter_str = "\"IfcClass\" != 'IfcSpace'"
             layers = self.iface.mapCanvas().layers()
             for layer in layers:
                 if isinstance(layer, QgsVectorLayer) and layer.fields().indexOf("IfcClass") != -1:
+                    # SALVA LA SELEZIONE PRIMA DEL FILTRO
+                    id_selezionati = layer.selectedFeatureIds()
                     subset = layer.subsetString()
-                    
-                    # Salviamo lo stato attuale del layer nel dizionario (anche se vuoto)
-                    self.filtri_originali_3d[layer.id()] = subset
-                    
+
+                    # Se il subset contiene già il NOSTRO filtro, è un residuo di una  sessione precedente: non va salvato come "originale"
+                    if filter_str in subset:
+                        continue
+
+                    # Salva lo stato attuale SENZA sovrascrivere un originale già salvato
+                    if layer.id() not in self.filtri_originali_3d:
+                        self.filtri_originali_3d[layer.id()] = subset
+
                     # Applichiamo il filtro per escludere gli IfcSpace
-                    filter_str = "\"IfcClass\" != 'IfcSpace'"
                     if subset:
-                        # Evita di aggiungerlo se per caso l'utente lo aveva già scritto a mano
+                        # Evita di aggiungerlo se l'utente lo aveva già scritto a mano
                         if "IfcSpace" not in subset:
                             layer.setSubsetString(f"({subset}) AND {filter_str}")
                     else:
                         layer.setSubsetString(filter_str)
-        # -----------------------------------------
+
+                    # RIPRISTINA LA SELEZIONE DOPO IL RESET DEL LAYER
+                    if id_selezionati:
+                        layer.selectByIds(id_selezionati)
         
         # imposta nome vista 
         nome_vista = "IFC 3D View"
@@ -478,34 +558,32 @@ class MyPlugin:
             if hasattr(manager, 'remove3DView'):
                 # Rimuove chirurgicamente solo la nostra vista, lasciando intatte quelle dell'utente
                 manager.remove3DView(nome_vista)
-
-        #-----------------------------------
         
         # 3. Crea la mappa 3D nativa
-        canvas_3d = self.iface.createNewMapCanvas3D(nome_vista)
+        self.canvas_3d = self.iface.createNewMapCanvas3D(nome_vista)
         
         # 4. Applica il ritaglio e l'inquadratura
-        if canvas_3d:
+        if self.canvas_3d:
 
             try:
                 # Recupera le impostazioni del 3D
-                settings_3d = canvas_3d.mapSettings()
+                settings_3d = self.canvas_3d.mapSettings()
                 
                 # Questa è la funzione che "ritaglia" fisicamente la scena rispetto alla Bounding Box
                 settings_3d.setExtent(extent)
                 
                 # Per ottimizzare l'esperienza, punta la telecamera direttamente sull'area
-                canvas_3d.scene().viewZoomFull()
+                self.canvas_3d.scene().viewZoomFull()
                  
             except AttributeError:
                 QMessageBox.warning(self.iface.mainWindow(), "3D Map View", self.tr("La tua versione di QGIS non supporta il ritaglio 3D. Aggiorna ad una versione superiore per questa funzionalità."))
             
+            self.canvas_3d.destroyed.connect(lambda: QTimer.singleShot(0, self.ripristina_filtri_ifcspace))
 
-            canvas_3d.destroyed.connect(self.ripristina_filtri_ifcspace)
 
     
     # togli i filtri applicati agli IfcSpace quando chiudi la vista 3D, in modo da non lasciare modifiche permanenti sui layer 2D
-    def ripristina_filtri_ifcspace(self, obj=None):
+    def ripristina_filtri_ifcspace(self, mostra_messaggio=True):
         """Fase 3: Ripristina i layer 2D in automatico quando chiudi la vista 3D"""
         
         if hasattr(self, 'filtri_originali_3d') and self.filtri_originali_3d:
@@ -514,21 +592,71 @@ class MyPlugin:
             for layer_id, filtro_orig in self.filtri_originali_3d.items():
                 layer = QgsProject.instance().mapLayer(layer_id)
                 if layer:
+                    # SALVA LA SELEZIONE PRIMA DI RIMUOVERE IL FILTRO
+                    id_selezionati_correnti = layer.selectedFeatureIds()
+
                     layer.setSubsetString(filtro_orig)
+
+                    # RIPRISTINA LA SELEZIONE ADESSO CHE IL LAYER È PULITO
+                    if id_selezionati_correnti:
+                        layer.selectByIds(id_selezionati_correnti)
             
             # Svuotiamo il dizionario
             self.filtri_originali_3d.clear()
             
-            # Messaggio di conferma
-            self.iface.messageBar().pushMessage(
-                "3D Map View", 
-                self.tr("Mappa 3D chiusa. I filtri originali sono stati ripristinati."), 
-                level=Qgis.Success, 
-                duration=3
-            )
+            # Messaggio di conferma (solo alla chiusura vera della mappa 3D)
+            if mostra_messaggio:
+                self.iface.messageBar().pushMessage(
+                    "3D Map View", 
+                    self.tr("Mappa 3D chiusa. I filtri originali sono stati ripristinati."), 
+                    level=Qgis.Success, 
+                    duration=3
+                )
+        
+        # Pulisce il riferimento al canvas per evitare memory leak
+        self.canvas_3d = None
 
             
+    #------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+    def run_properties(self):
+        if not self.properties_dialog:
+            self.properties_dialog = IFCPropertiesDialog(self.iface, parent=self.iface.mainWindow())
+            # ObjectName univoco per permettere a QGIS di salvare lo stato della UI
+            self.properties_dialog.setObjectName("IfcSqlPropertiesDock")
+            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.properties_dialog)
+
+        # Popola le combo box con le connessioni esistenti prima di mostrare la UI
+        self.properties_dialog.populate_connection_combo_MSSQL()
+        self.properties_dialog.populate_connection_combo_PostgreSQL()
         
+        # Mostra la finestra
+        self.properties_dialog.show() 
+        
+        # Forza l'aggancio intelligente a schede
+        self.force_tabify_properties_dock()
+        
+        # Porta in primo piano la scheda appena creata
+        self.properties_dialog.raise_()
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     
@@ -1581,6 +1709,7 @@ class ImportaIFCDialog(Ui_InserisciFileIFC, QMainWindow):
                         WHERE 
                             t2."ProjectId" = %s
                             AND t1."Value" IN %s
+                            AND t1."OrdinalPosition" = 1
                     """, (project_id, batch_gids))
 
                     for entity_id, value in cursor.fetchall():
@@ -2191,7 +2320,7 @@ class EliminaProgettoDialog(Ui_EliminaProgettoIFC, QMainWindow):
         
         # Collega i pulsanti alle funzioni di crezione nuova connessione
         self.pushButton_NuovaConnessioneMSSQL.clicked.connect(self.create_new_connection_MSSQL)
-        self.pushButton_NuovaCpnnessionePostgreSQL.clicked.connect(self.create_new_connection_PostgreSQL)
+        self.pushButton_NuovaConnessionePostgreSQL.clicked.connect(self.create_new_connection_PostgreSQL)
         
         # Connetti i database
         self.pushButton_ConnettiDB.clicked.connect(self.connect_both_databases)
@@ -2870,16 +2999,14 @@ class EliminaProgettoDialog(Ui_EliminaProgettoIFC, QMainWindow):
 
 
 
-#     ██████  ██    ██ ███████ ██████  ██    ██      ██████ ██       █████  ███████ ███████ 
-#    ██    ██ ██    ██ ██      ██   ██  ██  ██      ██      ██      ██   ██ ██      ██      
-#    ██    ██ ██    ██ █████   ██████    ████       ██      ██      ███████ ███████ ███████ 
-#    ██ ▄▄ ██ ██    ██ ██      ██   ██    ██        ██      ██      ██   ██      ██      ██ 
-#     ██████   ██████  ███████ ██   ██    ██         ██████ ███████ ██   ██ ███████ ███████ 
-#        ▀▀                                                                                 
-#                                                                                           
+                                                                                           
 
 
-
+#  ███████ ██ ██      ███████ ███████ ██████       ██████ ██       █████  ███████ ███████
+#  ██      ██ ██        ██    ██      ██  ██      ██      ██      ██   ██ ██      ██     
+#  █████   ██ ██        ██    █████   ██████      ██      ██      ███████ ███████ ███████
+#  ██      ██ ██        ██    ██      ██  ██      ██      ██      ██   ██      ██      ██
+#  ██      ██ ███████   ██    ███████ ██  ██       ██████ ███████ ██   ██ ███████ ███████
 
 
 
@@ -2896,7 +3023,7 @@ class EliminaProgettoDialog(Ui_EliminaProgettoIFC, QMainWindow):
 #######################################################################
         
 
-class QueryDialog(Ui_Query, QDockWidget):
+class QueryDialog(Ui_Filter, QDockWidget):
     def __init__(self, iface, parent=None):
         super(QueryDialog, self).__init__(parent)
         self.setupUi(self)
@@ -2908,11 +3035,15 @@ class QueryDialog(Ui_Query, QDockWidget):
 
         # Inizializza il LED grigio
         self.set_led_color("gray")
-
-        # Plusanti gestione connessione DB
+        
+        # Pulsanti gestione connessione DB (MSSQL + PostgreSQL)
         self.comboBox_Connessione.currentIndexChanged.connect(self.reset_ui_on_connection_change_PostgreSQL_Query)
+        self.comboBox_MSSQL.currentIndexChanged.connect(self.reset_ui_on_connection_change_MSSQL_Query)
         self.pushButton_NuovaConnessione.clicked.connect(self.create_new_connection_PostgreSQL_Query)
-        self.pushButton_ConnettiDB.clicked.connect(self.connect_selected_DB_PostgreSQL_Query)
+        self.pushButton_NuovaConnessioneMSSQL.clicked.connect(self.create_new_connection_MSSQL_Query)
+        # Un solo pulsante connette entrambi i database contemporaneamente
+        self.pushButton_ConnettiDB.clicked.connect(self.connect_both_databases_Query)
+        
 
         # Inizializza variabili per il disegno
         self.map_tool = None
@@ -3014,58 +3145,191 @@ class QueryDialog(Ui_Query, QDockWidget):
     def create_new_connection_PostgreSQL_Query(self): 
         self.iface.openDataSourceManagerPage("postgres")    
 
-    #prendi i parametri della connessione selezionata PostgreSQL---------------------------------------------
+    # stesse funzioni per MSSQL
+    def reset_ui_on_connection_change_MSSQL_Query(self):
+        """Resetta il LED e l'etichetta quando la selezione della connessione MSSQL cambia."""
+        self.set_led_color("gray")
+        self.label_led.setText(self.tr("Seleziona e connetti"))
+        if hasattr(self, '_mssql_conn_params'):
+            del self._mssql_conn_params
+
+        connection_name = self.comboBox_MSSQL.currentText()
+        if connection_name:
+            s = QSettings()
+            s.beginGroup(f"MSSQL/connections/{connection_name}")
+            host = s.value("host", "N/A")
+            db = s.value("database", "N/A")
+            user = s.value("username")
+            if not user:
+                user = "Trusted Connection"
+            s.endGroup()
+            tooltip_text = (f"<b>Connection:</b> {connection_name}<br>"
+                            f"<b>Host:</b> {host}<br>"
+                            f"<b>Database:</b> {db}<br>"
+                            f"<b>User:</b> {user}")
+            self.comboBox_MSSQL.setToolTip(tooltip_text)
+        else:
+            self.comboBox_MSSQL.setToolTip("")
+
+    def populate_connection_combo_MSSQL_Query(self):
+        self.comboBox_MSSQL.clear()
+        settings = QSettings()
+        settings.beginGroup('MSSQL/connections')
+        connections = settings.childGroups()
+        self.comboBox_MSSQL.addItems(connections)
+
+    def create_new_connection_MSSQL_Query(self):
+        self.iface.openDataSourceManagerPage("mssql")
+
+
+
+    # FUNZIONE PER VERIFICARE L'ALLINEAMENTO DEI DATABASE CONFRONTANDO I GUID (MSSQL vs Postgres)
+    def verify_database_alignment_Query(self):
+        """Verifica l'allineamento confrontando i GUID dei due database target."""
+        guid_direct_mssql = None
+        try:
+            host, db, user, pwd = self._mssql_conn_params
+            conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host};DATABASE={db};TrustServerCertificate=yes;"
+            if user and str(user).strip():
+                conn_str += f"UID={user};PWD={pwd};"
+            else:
+                conn_str += "Trusted_Connection=yes;"
+            conn = pyodbc.connect(conn_str, timeout=15)
+            cursor = conn.cursor()
+            cursor.execute("SELECT service_broker_guid FROM sys.databases WHERE name = 'ifcSQL'")
+            row = cursor.fetchone()
+            if row:
+                guid_direct_mssql = str(row[0])
+            conn.close()
+            if not guid_direct_mssql:
+                return False, self.tr("Impossibile recuperare GUID dal DB MSSQL (ifcSQL).")
+        except Exception as e:
+            return False, self.tr("Errore lettura GUID MSSQL Diretto: {error}").format(error=str(e))
+
+        guid_via_postgres = None
+        try:
+            h_pg, db_pg, u_pg, p_pg, port_pg = self._postgresql_conn_params
+            conn_pg = psycopg2.connect(host=h_pg, database=db_pg, user=u_pg, password=p_pg, port=port_pg)
+            cursor_pg = conn_pg.cursor()
+            cursor_pg.execute("SELECT db_guid FROM public.mssql_identity_card")
+            row_pg = cursor_pg.fetchone()
+            conn_pg.close()
+            if row_pg and row_pg[0]:
+                guid_via_postgres = str(row_pg[0])
+            else:
+                return False, self.tr("La tabella 'public.mssql_identity_card' in Postgres è vuota o non accessibile.")
+        except Exception as e:
+            return False, self.tr("Errore leggendo 'mssql_identity_card' da Postgres:\n\n{error}").format(error=str(e))
+
+        if guid_direct_mssql.strip().lower() == guid_via_postgres.strip().lower():
+            return True, self.tr("OK")
+        else:
+            return False, (self.tr("DISALLINEAMENTO DATABASE!\n\n1. GUID MSSQL (QGIS): {guid_ms}\n2. GUID MSSQL (visto da PG): {guid_pg}\n\nPostgreSQL è collegato a un database MSSQL diverso da quello selezionato.").format(guid_ms=guid_direct_mssql, guid_pg=guid_via_postgres))
+
+    def connect_both_databases_Query(self):
+        self.mssql_ready = False
+        self.postgres_ready = False
+        self.connection_errors = []
+        self.set_led_color("#ffd700")
+        self.label_led.setText(self.tr("Connessione in corso..."))
+        self.pushButton_ConnettiDB.setEnabled(False)
+        self.connect_selected_DB_MSSQL_Query()
+        self.connect_selected_DB_PostgreSQL_Query()
+
+    def connect_selected_DB_MSSQL_Query(self):
+        selected_connection = self.comboBox_MSSQL.currentText()
+        if hasattr(self, '_mssql_conn_params'): del self._mssql_conn_params
+        if not selected_connection:
+            self.on_mssql_error_Query(self.tr("Nessuna connessione MSSQL selezionata"))
+            return
+        settings = QSettings()
+        settings.beginGroup(f"MSSQL/connections/{selected_connection}")
+        host = settings.value("host")
+        database = settings.value("database")
+        username = settings.value("username")
+        password = settings.value("password")
+        settings.endGroup()
+        if not host or not database:
+            self.on_mssql_error_Query(self.tr("Parametri MSSQL mancanti"))
+            return
+        self.ms_thread = MssqlConnectionThread(host, database, username, password)
+        self.ms_thread.success.connect(self.on_mssql_connected_Query)
+        self.ms_thread.error.connect(self.on_mssql_error_Query)
+        self.ms_thread.start()
+
     def connect_selected_DB_PostgreSQL_Query(self):
         selected_connection = self.comboBox_Connessione.currentText()
         if hasattr(self, '_postgresql_conn_params'): del self._postgresql_conn_params
-
         if not selected_connection:
-            self.set_led_color("gray")
-            self.label_led.setText(self.tr("Nessuna connessione selezionata"))
+            self.on_pg_error_Query(self.tr("Nessuna connessione PostgreSQL selezionata"))
             return
-
         settings = QSettings()
         settings.beginGroup(f"PostgreSQL/connections/{selected_connection}")
         host = settings.value("host")
         database = settings.value("database")
         username = settings.value("username")
         password = settings.value("password")
-        port = settings.value("port", type=int) 
+        port = settings.value("port", type=int)
         settings.endGroup()
-
         if not host or not database or not username or port == 0:
-            self.set_led_color("#fa3e3e")
-            self.label_led.setText(self.tr("Parametri mancanti"))
+            self.on_pg_error_Query(self.tr("Parametri PostgreSQL mancanti"))
             return
-
-        # UI: Connessione in corso...
-        self.set_led_color("#ffd700")
-        self.label_led.setText(self.tr("Connessione in corso..."))
-        self.pushButton_ConnettiDB.setEnabled(False)
-
-        # Avvio Thread
         self.pg_thread = PostgresConnectionThread(host, database, username, password, port)
-        self.pg_thread.success.connect(self.on_query_connected)
-        self.pg_thread.error.connect(self.on_query_error)
+        self.pg_thread.success.connect(self.on_pg_connected_Query)
+        self.pg_thread.error.connect(self.on_pg_error_Query)
         self.pg_thread.start()
 
-    def on_query_connected(self, params):
+    def on_mssql_connected_Query(self, params):
+        self._mssql_conn_params = params
+        self.mssql_ready = True
+        self.check_if_both_ready_Query()
+
+    def on_mssql_error_Query(self, err_msg):
+        self.connection_errors.append(f"MSSQL: {err_msg}")
+        self.check_if_both_ready_Query()
+
+    def on_pg_connected_Query(self, params):
         self._postgresql_conn_params = params
-        self.set_led_color("#90ee90")
-        self.label_led.setText(self.tr("Connesso"))
-        self.pushButton_ConnettiDB.setEnabled(True)
-        
-        # Popolamento dati automatico
-        self.populate_territory_tables()
-        if self.stackedWidget.currentIndex() == 2:
-            self.populate_project_list()
+        self.postgres_ready = True
+        self.check_if_both_ready_Query()
 
-    def on_query_error(self, err_msg):
-        self.set_led_color("#fa3e3e")
-        self.label_led.setText(self.tr("Connessione fallita"))
-        self.pushButton_ConnettiDB.setEnabled(True)
-        QMessageBox.warning(self, self.tr("Errore PostgreSQL"), self.tr("Impossibile raggiungere il database.\n\nDettaglio:\n{err}").format(err=err_msg))
+    def on_pg_error_Query(self, err_msg):
+        self.connection_errors.append(f"PostgreSQL: {err_msg}")
+        self.check_if_both_ready_Query()
 
+    def check_if_both_ready_Query(self):
+        mssql_finished = self.mssql_ready or any("MSSQL" in e for e in self.connection_errors)
+        pg_finished = self.postgres_ready or any("PostgreSQL" in e for e in self.connection_errors)
+        if not (mssql_finished and pg_finished):
+            return
+        if self.connection_errors:
+            self.set_led_color("#fa3e3e")
+            self.label_led.setText(self.tr("Errore Connessione"))
+            self.pushButton_ConnettiDB.setEnabled(True)
+            QMessageBox.critical(self, self.tr("Errore di Connessione"), "\n\n".join(self.connection_errors))
+            return
+        try:
+            is_aligned, error_message = self.verify_database_alignment_Query()
+            if is_aligned:
+                self.set_led_color("#90ee90")
+                self.label_led.setText(self.tr("Connessi e Allineati"))
+                self.populate_territory_tables()
+                if self.stackedWidget.currentIndex() == 2:
+                    self.populate_project_list()
+            else:
+                self.set_led_color("#fa3e3e")
+                self.label_led.setText(self.tr("Errore Allineamento DB!"))
+                QMessageBox.critical(self, self.tr("Disallineamento Database"),
+                                     self.tr("Verifica fallita:\n\n{error_message}").format(error_message=error_message))
+                if hasattr(self, '_mssql_conn_params'): del self._mssql_conn_params
+                if hasattr(self, '_postgresql_conn_params'): del self._postgresql_conn_params
+        except Exception as e:
+            self.set_led_color("#fa3e3e")
+            self.label_led.setText(self.tr("Errore imprevisto"))
+            QMessageBox.critical(self, self.tr("Errore Script"), self.tr("Eccezione durante la verifica:\n{error}").format(error=str(e)))
+        finally:
+            self.pushButton_ConnettiDB.setEnabled(True)
+    
 
     # Funzione chiamata alla chiusura del dock
     def closeEvent(self, event):
@@ -3075,6 +3339,7 @@ class QueryDialog(Ui_Query, QDockWidget):
         self.reset_predefined_filters(hard_reset=True)
         # 2. Resetta la logica interna della connessione (LED grigio e params)
         self.reset_ui_on_connection_change_PostgreSQL_Query()
+        self.reset_ui_on_connection_change_MSSQL_Query()
         
 
         # PULIZIA STRUMENTO DISEGNO
@@ -3166,6 +3431,13 @@ class QueryDialog(Ui_Query, QDockWidget):
             
             # Pulisce sempre la lista classi IFC quando si cambia contesto
             self.listWidget_ClasseIFC.clear()
+            self.listWidget_PianoIFC.clear()  # Svuota la lista dei piani
+            self.lineEdit_PianoIFC.clear()    # Svuota la barra di ricerca dei piani
+
+            self.listWidget_PianoIFC_2.clear()
+            self.lineEdit_PianoIFC_2.clear()
+            self.listWidget_ClasseIFC_2.clear()
+            self.lineEdit_ClasseIFC_2.clear()
             
 
 
@@ -3281,11 +3553,11 @@ class QueryDialog(Ui_Query, QDockWidget):
         # Verifichiamo la connessione SOLO se stiamo provando ad ATTIVARE il disegno.
         # Se stiamo disattivando (is_drawing = True), lasciamo proseguire per chiudere correttamente.
         if not self.is_drawing:
-            if not hasattr(self, '_postgresql_conn_params'):
+            if not hasattr(self, '_postgresql_conn_params') or not hasattr(self, '_mssql_conn_params'):
                 QMessageBox.warning(
                     self, 
                     self.tr("Database non connesso"), 
-                    self.tr("Attenzione: Non sei connesso al database PostgreSQL.\n\nÈ necessario connettersi prima di selezionare un'area, altrimenti non sarà possibile recuperare le classi IFC contenute nella selezione."
+                    self.tr("Attenzione: Non sei connesso ai database.\n\nÈ necessario connettersi prima di selezionare un'area, altrimenti non sarà possibile recuperare le classi IFC contenute nella selezione."
                     )
                 )
                 return # Interrompe la funzione: il cursore non cambierà e il disegno non partirà.
@@ -3347,8 +3619,9 @@ class QueryDialog(Ui_Query, QDockWidget):
                 # CHIAMATA ALLA NUOVA FUNZIONE
                 self.show_geometry_on_mini_map(self.current_area_geometry)
 
-                # --- AGGIORNA LA LISTA CLASSI IFC SUBITO ---
+                # --- AGGIORNA LE LISTE IFC (CLASSI E PIANI) SUBITO ---
                 self.populate_available_ifc_classes()
+                self.populate_available_ifc_storeys()
 
             # Caso B: L'utente dice SI, ma la geometria è invalida
             else:
@@ -3357,6 +3630,7 @@ class QueryDialog(Ui_Query, QDockWidget):
 
                 # --- Aggiorna la lista IFC (La svuota perché non c'è geometria) ---
                 self.populate_available_ifc_classes()
+                self.populate_available_ifc_storeys()
 
         # Caso C: L'utente dice NO (Annulla)
         else:
@@ -3364,6 +3638,7 @@ class QueryDialog(Ui_Query, QDockWidget):
 
             # --- Aggiorna la lista (La svuota perché non c'è geometria) ---
             self.populate_available_ifc_classes()
+            self.populate_available_ifc_storeys()
 
 
         # 5. Ripristina stato UI
@@ -3538,21 +3813,38 @@ class QueryDialog(Ui_Query, QDockWidget):
         
         self.comboBox_SelezionaFIltroIFC.clear()
         self.comboBox_SelezionaFIltroIFC.addItem(self.tr("Filtro Classe IFC"), 0) # Page_1 (index 0)
-        
+        self.comboBox_SelezionaFIltroIFC.addItem(self.tr("Filtro Piano IFC"), 1)         # page_2_FiltroPianoIFC  (index 1)
+        self.comboBox_SelezionaFIltroIFC.addItem(self.tr("Filtro Classe e Piano IFC"), 2) # page_3_FiltroDoppio    (index 2)
+
+
         # Collega il segnale
         self.comboBox_SelezionaFIltroIFC.currentIndexChanged.connect(self.change_ifc_page)
         
         # Imposta pagina iniziale
         self.change_ifc_page(0)
 
-        # Collega la barra di ricerca alla funzione di filtro
+        # BARRE DI RICERCA TESTUALE
         self.lineEdit_ClasseIFC.textChanged.connect(self.filter_ifc_list)
+        self.lineEdit_PianoIFC.textChanged.connect(self.filter_storey_list)
+        
+        # --- AGGIUNTE PER PAGINA 3 (FILTRO DOPPIO) ---
+        self.lineEdit_PianoIFC_2.textChanged.connect(self.filter_storey_list_2)
+        self.lineEdit_ClasseIFC_2.textChanged.connect(self.filter_class_list_2)
+        
+        # Rileva quando l'utente seleziona/deseleziona un piano nella terza tab per aggiornare le classi relative
+        self.listWidget_PianoIFC_2.itemChanged.connect(self.populate_double_filter_classes)
+
+        # Aggiorna i piani (di entrambe le liste) quando cambiano i filtri del contesto geografico o progettuale
+        self.comboBox_SelezionaArea.checkedItemsChanged.connect(self.populate_available_ifc_storeys)
+        self.groupBox_2_FiltroContesto.toggled.connect(self.populate_available_ifc_storeys)
+        self.list_Progetti.itemChanged.connect(self.populate_available_ifc_storeys)
+        
 
     def change_ifc_page(self, index):
         """Cambia la pagina visibile nello stackedWidget IFC."""
         page_idx = self.comboBox_SelezionaFIltroIFC.itemData(index)
         if page_idx is not None:
-            self.stackedWidget_2.setCurrentIndex(page_idx)
+            self.stackedWidget_IFC.setCurrentIndex(page_idx)
 
     
     # Funzione per filtrare la lista delle classi IFC
@@ -3700,6 +3992,294 @@ class QueryDialog(Ui_Query, QDockWidget):
 
 
 
+    # =========================================================================
+    # Funzioni pagina 2 - Filtro piano IFC
+
+    def populate_available_ifc_storeys(self):
+        """
+        Popola le liste dei piani (Tab 2 e Tab 3) estratti da MSSQL
+        mostrando SOLO i piani che hanno elementi con geometria reale 
+        nel contesto spaziale o progettuale selezionato.
+        """
+        self.listWidget_PianoIFC.clear()
+        self.listWidget_PianoIFC_2.clear()
+        self.listWidget_ClasseIFC_2.clear()
+
+        # Inserisce la scritta segnaposto iniziale nella lista delle classi del filtro doppio
+        placeholder_item = QListWidgetItem(self.tr("Seleziona un piano per caricare le classi relative"))
+        placeholder_item.setFlags(Qt.NoItemFlags)
+        font = placeholder_item.font()
+        font.setItalic(True)
+        placeholder_item.setFont(font)
+        placeholder_item.setForeground(QColor("gray"))
+        self.listWidget_ClasseIFC_2.addItem(placeholder_item)
+
+        if not hasattr(self, '_postgresql_conn_params') or not hasattr(self, '_mssql_conn_params'):
+            return
+
+        use_context = self.groupBox_2_FiltroContesto.isChecked()
+        current_page_idx = self.stackedWidget.currentIndex() if use_context else -1
+        
+        project_names = []
+        active_ids = set()
+
+        try:
+            conn_pg = self._get_db_connection()
+            if not conn_pg: return
+            cur_pg = conn_pg.cursor()
+            
+            # --- FASE 1: Estrazione ID attivi e Nomi Progetto da PostgreSQL ---
+            if use_context:
+                if current_page_idx == 0:  # Filtro Geografico Predefinito (Comuni/Aree)
+                    selected_table = self.comboBox_SelezionaTipoArea.currentText()
+                    selected_areas = self.comboBox_SelezionaArea.checkedItems()
+                    if not selected_table or not selected_areas:
+                        cur_pg.close(); conn_pg.close(); return 
+                    QApplication.setOverrideCursor(Qt.WaitCursor)
+                    areas_formatted = ", ".join([f"'{a.replace('\'', '\'\'')}'" for a in selected_areas])
+                    query = f"""
+                        SELECT g."GlobalId_MSSQL", g."ProjectName" FROM "ifcgeometry"."entitygeometry" g
+                        JOIN "territory"."{selected_table}" t ON ST_Within(g."Geometry", t.geom)
+                        WHERE t."name" IN ({areas_formatted}) AND g."GlobalId_MSSQL" IS NOT NULL;
+                    """
+                    cur_pg.execute(query)
+                    rows_pg = cur_pg.fetchall()
+                    active_ids = set(row[0] for row in rows_pg)
+                    project_names = list(set(row[1] for row in rows_pg if row[1]))
+
+                elif current_page_idx == 1:  # Filtro Manuale disegnato su mappa
+                    if not self.current_area_geometry:
+                        cur_pg.close(); conn_pg.close(); return
+                    QApplication.setOverrideCursor(Qt.WaitCursor)
+                    wkt_area = self.current_area_geometry.asWkt()
+                    srid = self.iface.mapCanvas().mapSettings().destinationCrs().postgisSrid()
+                    query = f"""
+                        SELECT g."GlobalId_MSSQL", g."ProjectName" FROM "ifcgeometry"."entitygeometry" g
+                        WHERE ST_Intersects(g."Geometry", ST_GeomFromText('{wkt_area}', {srid})) AND g."GlobalId_MSSQL" IS NOT NULL;
+                    """
+                    cur_pg.execute(query)
+                    rows_pg = cur_pg.fetchall()
+                    active_ids = set(row[0] for row in rows_pg)
+                    project_names = list(set(row[1] for row in rows_pg if row[1]))
+
+                elif current_page_idx == 2:  # Filtro Progetto esplicito
+                    for i in range(self.list_Progetti.count()):
+                        item = self.list_Progetti.item(i)
+                        if item.checkState() == Qt.Checked and not item.isHidden():
+                            project_names.append(item.text())
+                    if not project_names:
+                        cur_pg.close(); conn_pg.close(); return
+                    QApplication.setOverrideCursor(Qt.WaitCursor)
+                    projects_formatted = ", ".join([f"'{p.replace('\'', '\'\'')}'" for p in project_names])
+                    query = f"""
+                        SELECT g."GlobalId_MSSQL" FROM "ifcgeometry"."entitygeometry" g
+                        WHERE g."ProjectName" IN ({projects_formatted}) AND g."GlobalId_MSSQL" IS NOT NULL;
+                    """
+                    cur_pg.execute(query)
+                    active_ids = set(row[0] for row in cur_pg.fetchall())
+            else:
+                # Se il contesto è disattivato, prendiamo tutti i progetti con almeno una geometria
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                query = 'SELECT DISTINCT "ProjectName" FROM ifcgeometry.entitygeometry WHERE "ProjectName" IS NOT NULL;'
+                cur_pg.execute(query)
+                project_names = [row[0] for row in cur_pg.fetchall()]
+
+            cur_pg.close()
+            conn_pg.close()
+
+            if not project_names and not active_ids: return
+
+            # --- FASE 2: Interrogazione Relazionale Piani su MSSQL ---
+            host, db, user, pwd = self._mssql_conn_params
+            conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host};DATABASE={db};TrustServerCertificate=yes;"
+            if user and str(user).strip(): conn_str += f"UID={user};PWD={pwd};"
+            else: conn_str += "Trusted_Connection=yes;"
+
+            conn_ms = pyodbc.connect(conn_str, timeout=15)
+            cur_ms = conn_ms.cursor()
+            
+            projects_formatted = ", ".join([f"'{p.replace('\'', '\'\'')}'" for p in project_names])
+            query_ms = f"""
+                SELECT DISTINCT relListObj.[Value] AS ElementID, storeyName.[Value] AS NomeLivello
+                FROM [ifcProject].[Project] p
+                JOIN [ifcProject].[EntityInstanceIdAssignment] assign ON p.ProjectId = assign.ProjectId
+                JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj ON assign.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId
+                JOIN [ifcInstance].[EntityAttributeOfEntityRef] spatialRef ON spatialRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                JOIN [ifcInstance].[Entity] spatialEntity ON spatialEntity.GlobalEntityInstanceId = spatialRef.[Value]
+                JOIN [ifcSchema].[Type] spatialType ON spatialEntity.EntityTypeId = spatialType.TypeId
+                JOIN [ifcInstance].[EntityAttributeOfString] storeyName ON storeyName.GlobalEntityInstanceId = spatialRef.[Value] AND storeyName.OrdinalPosition = 3
+                WHERE p.ProjectName IN ({projects_formatted})
+                  AND spatialType.ExpressName = 'IfcBuildingStorey' -- Sfoltisce gli elementi fantasma
+                  AND ((relType.ExpressName = 'IfcRelContainedInSpatialStructure' AND spatialRef.OrdinalPosition = 6)
+                       OR (relType.ExpressName = 'IfcRelAggregates' AND spatialRef.OrdinalPosition = 5));
+            """
+
+            cur_ms.execute(query_ms)
+            
+            # --- FASE 3: Filtraggio Incrociato in Memoria (Zero Elementi Fantasma) ---
+            storeys_set = set()
+            for row in cur_ms.fetchall():
+                element_id = row[0]
+                storey_name = row[1]
+                # Se il contesto è attivo, mostriamo il piano solo se l'ID elemento ha geometria reale nel set
+                if not use_context or (element_id in active_ids):
+                    if storey_name:
+                        storeys_set.add(storey_name)
+            
+            cur_ms.close()
+            conn_ms.close()
+
+            storeys = sorted(list(storeys_set))
+
+            # --- FASE 4: Popolamento interfacce ---
+            if storeys:
+                self.listWidget_PianoIFC_2.blockSignals(True)
+                for storey in storeys:
+                    item1 = QListWidgetItem(str(storey))
+                    item1.setFlags(item1.flags() | Qt.ItemIsUserCheckable)
+                    item1.setCheckState(Qt.Unchecked)
+                    self.listWidget_PianoIFC.addItem(item1)
+
+                    item2 = QListWidgetItem(str(storey))
+                    item2.setFlags(item2.flags() | Qt.ItemIsUserCheckable)
+                    item2.setCheckState(Qt.Unchecked)
+                    self.listWidget_PianoIFC_2.addItem(item2)
+                self.listWidget_PianoIFC_2.blockSignals(False)
+
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Errore caricamento piani IFC filtrati: {str(e)}", "ifcSQL", Qgis.Critical)
+        finally:
+            try: QApplication.restoreOverrideCursor()
+            except: pass
+
+    def populate_double_filter_classes(self, item=None):
+        """
+        Metodo ad evento eseguito quando l'utente seleziona/deseleziona un piano nella Tab 3.
+        Estrae da MSSQL le sole classi IFC presenti nei livelli selezionati, incrociandole
+        con PostgreSQL per mostrare SOLO quelle che hanno geometrie reali nell'area scelta.
+        """
+        selected_storeys = []
+        for i in range(self.listWidget_PianoIFC_2.count()):
+            it = self.listWidget_PianoIFC_2.item(i)
+            if it.checkState() == Qt.Checked:
+                selected_storeys.append(it.text())
+
+        self.listWidget_ClasseIFC_2.clear()
+
+        if not selected_storeys:
+            placeholder_item = QListWidgetItem(self.tr("Seleziona un piano per caricare le classi relative"))
+            placeholder_item.setFlags(Qt.NoItemFlags)
+            font = placeholder_item.font()
+            font.setItalic(True)
+            placeholder_item.setFont(font)
+            placeholder_item.setForeground(QColor("gray"))
+            self.listWidget_ClasseIFC_2.addItem(placeholder_item)
+            return
+
+        if not hasattr(self, '_postgresql_conn_params') or not hasattr(self, '_mssql_conn_params'):
+            return
+
+        use_context = self.groupBox_2_FiltroContesto.isChecked()
+        current_page_idx = self.stackedWidget.currentIndex() if use_context else -1
+        active_ids = set()
+
+        try:
+            # --- FASE 1: Recupero ID Geometrici dal Contesto Corrente (PostgreSQL) ---
+            conn_pg = self._get_db_connection()
+            if conn_pg:
+                cur_pg = conn_pg.cursor()
+                if use_context:
+                    if current_page_idx == 0:  # Filtro predefinito aree
+                        selected_table = self.comboBox_SelezionaTipoArea.currentText()
+                        selected_areas = self.comboBox_SelezionaArea.checkedItems()
+                        if selected_table and selected_areas:
+                            areas_formatted = ", ".join([f"'{a.replace('\'', '\'\'')}'" for a in selected_areas])
+                            query = f'SELECT g."GlobalId_MSSQL" FROM "ifcgeometry"."entitygeometry" g JOIN "territory"."{selected_table}" t ON ST_Within(g."Geometry", t.geom) WHERE t."name" IN ({areas_formatted}) AND g."GlobalId_MSSQL" IS NOT NULL;'
+                            cur_pg.execute(query)
+                            active_ids = set(row[0] for row in cur_pg.fetchall())
+                    elif current_page_idx == 1:  # Filtro disegno manuale
+                        if self.current_area_geometry:
+                            wkt_area = self.current_area_geometry.asWkt()
+                            srid = self.iface.mapCanvas().mapSettings().destinationCrs().postgisSrid()
+                            query = f"SELECT g.\"GlobalId_MSSQL\" FROM \"ifcgeometry\".\"entitygeometry\" g WHERE ST_Intersects(g.\"Geometry\", ST_GeomFromText('{wkt_area}', {srid})) AND g.\"GlobalId_MSSQL\" IS NOT NULL;"
+                            cur_pg.execute(query)
+                            active_ids = set(row[0] for row in cur_pg.fetchall())
+                    elif current_page_idx == 2:  # Filtro lista progetti
+                        project_names = []
+                        for i in range(self.list_Progetti.count()):
+                            it_p = self.list_Progetti.item(i)
+                            if it_p.checkState() == Qt.Checked and not it_p.isHidden():
+                                project_names.append(it_p.text())
+                        if project_names:
+                            projects_formatted = ", ".join([f"'{p.replace('\'', '\'\'')}'" for p in project_names])
+                            query = f'SELECT g."GlobalId_MSSQL" FROM "ifcgeometry"."entitygeometry" g WHERE g."ProjectName" IN ({projects_formatted}) AND g."GlobalId_MSSQL" IS NOT NULL;'
+                            cur_pg.execute(query)
+                            active_ids = set(row[0] for row in cur_pg.fetchall())
+                cur_pg.close()
+                conn_pg.close()
+
+            # --- FASE 2: Estrazione Classi per Piano da MSSQL ---
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            host, db, user, pwd = self._mssql_conn_params
+            conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host};DATABASE={db};TrustServerCertificate=yes;"
+            if user and str(user).strip(): conn_str += f"UID={user};PWD={pwd};"
+            else: conn_str += "Trusted_Connection=yes;"
+
+            conn_ms = pyodbc.connect(conn_str, timeout=15)
+            cur_ms = conn_ms.cursor()
+
+            storeys_formatted = ", ".join([f"'{s.replace('\'', '\'\'')}'" for s in selected_storeys])
+            query_ms = f"""
+                SELECT DISTINCT relListObj.[Value] AS ElementID, elType.ExpressName AS ClasseIFC
+                FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId
+                JOIN [ifcInstance].[EntityAttributeOfEntityRef] spatialRef ON spatialRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                JOIN [ifcInstance].[Entity] spatialEntity ON spatialEntity.GlobalEntityInstanceId = spatialRef.[Value]
+                JOIN [ifcSchema].[Type] spatialType ON spatialEntity.EntityTypeId = spatialType.TypeId
+                JOIN [ifcInstance].[Entity] elEntity ON elEntity.GlobalEntityInstanceId = relListObj.[Value]
+                JOIN [ifcSchema].[Type] elType ON elEntity.EntityTypeId = elType.TypeId
+                JOIN [ifcInstance].[EntityAttributeOfString] storeyName ON storeyName.GlobalEntityInstanceId = spatialRef.[Value] AND storeyName.OrdinalPosition = 3
+                WHERE storeyName.[Value] IN ({storeys_formatted})
+                  AND spatialType.ExpressName = 'IfcBuildingStorey' -- Evita falsi positivi nel match del nome
+                  AND ((relType.ExpressName = 'IfcRelContainedInSpatialStructure' AND spatialRef.OrdinalPosition = 6)
+                       OR (relType.ExpressName = 'IfcRelAggregates' AND spatialRef.OrdinalPosition = 5));
+            """
+
+            cur_ms.execute(query_ms)
+            
+            # --- FASE 3: Pulizia Classi senza Corpo Geometrico Reale ---
+            classes_set = set()
+            for row in cur_ms.fetchall():
+                element_id = row[0]
+                class_name = row[1]
+                if not use_context or (element_id in active_ids):
+                    if class_name:
+                        classes_set.add(class_name)
+            
+            cur_ms.close()
+            conn_ms.close()
+
+            classes = sorted(list(classes_set))
+
+            # --- FASE 4: Popolamento Widget ---
+            if not classes:
+                self.listWidget_ClasseIFC_2.addItem(self.tr("Nessuna classe con geometria in questi piani."))
+            else:
+                for cls in classes:
+                    it_cls = QListWidgetItem(str(cls))
+                    it_cls.setFlags(it_cls.flags() | Qt.ItemIsUserCheckable)
+                    it_cls.setCheckState(Qt.Unchecked)
+                    self.listWidget_ClasseIFC_2.addItem(it_cls)
+
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Errore caricamento classi filtro doppio: {str(e)}", "ifcSQL", Qgis.Critical)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+
 
 
 
@@ -3715,7 +4295,7 @@ class QueryDialog(Ui_Query, QDockWidget):
         """
         # 0. Verifica Connessione
         if not hasattr(self, '_postgresql_conn_params'):
-            QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Database non connesso."))
+            QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Database non connessi."))
             return
 
         # 1. Verifica stati dei gruppi (Checkbox)
@@ -3728,16 +4308,109 @@ class QueryDialog(Ui_Query, QDockWidget):
             return
         
         # --- PREPARAZIONE DATI IFC ---
+        ifc_filter_type = self.stackedWidget_IFC.currentIndex() if use_ifc else -1
         selected_classes = []
+        selected_storeys = []
+
         if use_ifc:
-            for index in range(self.listWidget_ClasseIFC.count()):
-                item = self.listWidget_ClasseIFC.item(index)
-                if item.checkState() == Qt.Checked:
-                    selected_classes.append(item.text())
+            # Caso 0: Filtro Classe attivo
+            if ifc_filter_type == 0:
+                for index in range(self.listWidget_ClasseIFC.count()):
+                    item = self.listWidget_ClasseIFC.item(index)
+                    if item.checkState() == Qt.Checked:
+                        selected_classes.append(item.text())
+                if not selected_classes:
+                    QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Filtro IFC attivo: Seleziona almeno una classe dalla lista."))
+                    return
             
-            if not selected_classes:
-                QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Filtro IFC attivo: Seleziona almeno una classe dalla lista."))
+            # Caso 1: Filtro Piano attivo
+            elif ifc_filter_type == 1:
+                for index in range(self.listWidget_PianoIFC.count()):
+                    item = self.listWidget_PianoIFC.item(index)
+                    if item.checkState() == Qt.Checked:
+                        selected_storeys.append(item.text())
+                if not selected_storeys:
+                    QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Filtro Piano attivo: Seleziona almeno un piano dalla lista."))
+                    return
+
+            # Caso 2: Filtro Doppio attivo (PAGINA 3)
+            elif ifc_filter_type == 2:
+                for index in range(self.listWidget_PianoIFC_2.count()):
+                    item = self.listWidget_PianoIFC_2.item(index)
+                    if item.checkState() == Qt.Checked:
+                        selected_storeys.append(item.text())
+                for index in range(self.listWidget_ClasseIFC_2.count()):
+                    item = self.listWidget_ClasseIFC_2.item(index)
+                    if item.flags() & Qt.ItemIsUserCheckable and item.checkState() == Qt.Checked:
+                        selected_classes.append(item.text())
+                if not selected_storeys or not selected_classes:
+                    QMessageBox.warning(self, self.tr("Attenzione"), self.tr("Filtro Doppio attivo: Spunta almeno un piano e una classe relazionata."))
+                    return
+
+        # Se viene usato il filtro piano (1) o il filtro doppio (2), estraiamo da MSSQL gli ID degli elementi relazionati
+        storey_element_ids = []
+        if use_ifc and ifc_filter_type in [1, 2]:
+            try:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                host, db, user, pwd = self._mssql_conn_params
+                conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host};DATABASE={db};TrustServerCertificate=yes;"
+                if user and str(user).strip(): conn_str += f"UID={user};PWD={pwd};"
+                else: conn_str += "Trusted_Connection=yes;"
+                
+                conn_ms = pyodbc.connect(conn_str, timeout=15)
+                cur_ms = conn_ms.cursor()
+                
+                storeys_formatted = ", ".join([f"'{s.replace('\'', '\'\'')}'" for s in selected_storeys])
+                
+                if ifc_filter_type == 1:
+                    # Query standard per piano (tutti gli elementi del piano)
+                    query_ms = f"""
+                        SELECT DISTINCT relListObj.[Value]
+                        FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                        JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] spatialRef ON spatialRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcInstance].[Entity] spatialEntity ON spatialEntity.GlobalEntityInstanceId = spatialRef.[Value]
+                        JOIN [ifcSchema].[Type] spatialType ON spatialEntity.EntityTypeId = spatialType.TypeId
+                        JOIN [ifcInstance].[EntityAttributeOfString] storeyName ON storeyName.GlobalEntityInstanceId = spatialRef.[Value] AND storeyName.OrdinalPosition = 3
+                        WHERE storeyName.[Value] IN ({storeys_formatted})
+                          AND spatialType.ExpressName = 'IfcBuildingStorey'
+                          AND ((relType.ExpressName = 'IfcRelContainedInSpatialStructure' && spatialRef.OrdinalPosition = 6)
+                               OR (relType.ExpressName = 'IfcRelAggregates' && spatialRef.OrdinalPosition = 5));
+                    """
+                else:
+                    # Query per filtro doppio (estrazione mirata per piano E classe dell'elemento)
+                    classes_formatted = ", ".join([f"'{c.replace('\'', '\'\'')}'" for c in selected_classes])
+                    query_ms = f"""
+                        SELECT DISTINCT relListObj.[Value]
+                        FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                        JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] spatialRef ON spatialRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcInstance].[Entity] spatialEntity ON spatialEntity.GlobalEntityInstanceId = spatialRef.[Value]
+                        JOIN [ifcSchema].[Type] spatialType ON spatialEntity.EntityTypeId = spatialType.TypeId
+                        JOIN [ifcInstance].[Entity] elEntity ON elEntity.GlobalEntityInstanceId = relListObj.[Value]
+                        JOIN [ifcSchema].[Type] elType ON elEntity.EntityTypeId = elType.TypeId
+                        JOIN [ifcInstance].[EntityAttributeOfString] storeyName ON storeyName.GlobalEntityInstanceId = spatialRef.[Value] AND storeyName.OrdinalPosition = 3
+                        WHERE storeyName.[Value] IN ({storeys_formatted})
+                          AND spatialType.ExpressName = 'IfcBuildingStorey'
+                          AND elType.ExpressName IN ({classes_formatted})
+                          AND ((relType.ExpressName = 'IfcRelContainedInSpatialStructure' AND spatialRef.OrdinalPosition = 6)
+                               OR (relType.ExpressName = 'IfcRelAggregates' AND spatialRef.OrdinalPosition = 5));
+                    """
+                cur_ms.execute(query_ms)
+                storey_element_ids = [row[0] for row in cur_ms.fetchall() if row[0]]
+                cur_ms.close()
+                conn_ms.close()
+                
+                if not storey_element_ids:
+                    QMessageBox.warning(self, self.tr("Nessun Risultato"), self.tr("Nessun elemento geometrico corrisponde ai criteri del filtro combinato."))
+                    return
+            except Exception as e:
+                QMessageBox.critical(self, self.tr("Errore Relazione Piani"), f"Errore durante l'estrazione degli elementi: {str(e)}")
                 return
+            finally:
+                QApplication.restoreOverrideCursor()
 
         # --- CONTROLLO AVVISO DATABASE COMPLETO ---
         # Condizione: Filtro IFC attivo MA Filtro Contesto spento
@@ -3824,9 +4497,12 @@ class QueryDialog(Ui_Query, QDockWidget):
 
         # --- LOGICA IFC ---
         if use_ifc:
-            # Nota: selected_classes è già stato popolato sopra per il controllo warning
-            classes_sql = ", ".join([f"'{c}'" for c in selected_classes])
-            where_conditions.append(f'g."IfcClass" IN ({classes_sql})')
+            if ifc_filter_type == 0:  # Tab delle sole classi
+                classes_sql = ", ".join([f"'{c}'" for c in selected_classes])
+                where_conditions.append(f'g."IfcClass" IN ({classes_sql})')
+            elif ifc_filter_type in [1, 2]:  # Tab dei piani o filtro doppio (entrambi veicolati tramite ID numerici estratti a priori)
+                ids_sql = ", ".join([str(x) for x in storey_element_ids])
+                where_conditions.append(f'g."GlobalId_MSSQL" IN ({ids_sql})')
 
         # --- SICUREZZA ---
         if not where_conditions:
@@ -3841,9 +4517,8 @@ class QueryDialog(Ui_Query, QDockWidget):
 
         print(self.tr("Query Generata: {final_sql}").format(final_sql=final_sql))
 
-        # 5. Configurazione Layer QGIS (Invariata)
+        # 5. Configurazione Layer QGIS
         host, database, username, password, port = self._postgresql_conn_params
-        
         uri = QgsDataSourceUri()
         uri.setConnection(host, str(port), database, username, password)
         uri.setDataSource("", f"({final_sql})", "Geometry", "", "GlobalId_MSSQL")
@@ -3874,13 +4549,20 @@ class QueryDialog(Ui_Query, QDockWidget):
                 else:
                     layer_parts.append(self.tr("Progetti"))
 
-        # 2. Parte IFC (Classi)
+        # 2. Parte IFC (Classi o Piani)
         if use_ifc: 
-            # 'selected_classes' è stato popolato all'inizio della funzione
-            if len(selected_classes) <= 3:
-                layer_parts.append(self.tr("Classi ({classes})").format(classes=", ".join(selected_classes)))
-            else:
-                layer_parts.append(self.tr("Classi IFC"))
+            if ifc_filter_type == 0:
+                if len(selected_classes) <= 3:
+                    layer_parts.append(self.tr("Classi ({classes})").format(classes=", ".join(selected_classes)))
+                else:
+                    layer_parts.append(self.tr("Classi IFC"))
+            elif ifc_filter_type == 1:
+                if len(selected_storeys) <= 3:
+                    layer_parts.append(self.tr("Piani ({storeys})").format(storeys=", ".join(selected_storeys)))
+                else:
+                    layer_parts.append(self.tr("Piani IFC"))
+            elif ifc_filter_type == 2:
+                layer_parts.append(self.tr("Classi+Piani"))
 
         # Unisce le parti con un " + "    
         layer_name = self.tr("Filtro: ") + " + ".join(layer_parts)
@@ -3915,6 +4597,13 @@ class QueryDialog(Ui_Query, QDockWidget):
         # Resetta liste e ricerche IFC
         self.listWidget_ClasseIFC.clear()
         self.lineEdit_ClasseIFC.clear() 
+        self.listWidget_PianoIFC.clear()
+        self.lineEdit_PianoIFC.clear()
+
+        self.listWidget_PianoIFC_2.clear()
+        self.lineEdit_PianoIFC_2.clear()
+        self.listWidget_ClasseIFC_2.clear()
+        self.lineEdit_ClasseIFC_2.clear()
 
         # 2. Ripristina lo stato dei Gruppi (Li riattiva entrambi)
         self.groupBox_2_FiltroContesto.setChecked(True)
@@ -3930,7 +4619,33 @@ class QueryDialog(Ui_Query, QDockWidget):
         if not silent:
             QMessageBox.information(self, self.tr("Reset"), self.tr("Tutti i filtri sono stati reimpostati allo stato iniziale."))
 
-    
+    # Funzione di filtro visivo per la lista dei piani IFC
+    def filter_storey_list(self, text):
+        """Filtra visivamente gli elementi della lista piani in base al testo digitato."""
+        for i in range(self.listWidget_PianoIFC.count()):
+            item = self.listWidget_PianoIFC.item(i)
+            if text.lower() in item.text().lower():
+                item.setHidden(False)
+            else:
+                item.setHidden(True)
+    def filter_storey_list_2(self, text):
+        """Filtra visivamente gli elementi della lista piani nella Tab 3."""
+        for i in range(self.listWidget_PianoIFC_2.count()):
+            item = self.listWidget_PianoIFC_2.item(i)
+            if text.lower() in item.text().lower():
+                item.setHidden(False)
+            else:
+                item.setHidden(True)
+    def filter_class_list_2(self, text):
+        """Filtra visivamente gli elementi della lista classi nella Tab 3."""
+        for i in range(self.listWidget_ClasseIFC_2.count()):
+            item = self.listWidget_ClasseIFC_2.item(i)
+            # Controlla che sia un elemento selezionabile e non il testo segnaposto grigio
+            if item.flags() & Qt.ItemIsUserCheckable:
+                if text.lower() in item.text().lower():
+                    item.setHidden(False)
+                else:
+                    item.setHidden(True)
 
 
 
@@ -4012,3 +4727,1395 @@ class AreaSelectorTool(QgsMapToolEmitPoint):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#     ██████  ██    ██ ███████ ██████  ██    ██      ██████ ██       █████  ███████ ███████ 
+#    ██    ██ ██    ██ ██      ██   ██  ██  ██      ██      ██      ██   ██ ██      ██      
+#    ██    ██ ██    ██ █████   ██████    ████       ██      ██      ███████ ███████ ███████ 
+#    ██ ▄▄ ██ ██    ██ ██      ██   ██    ██        ██      ██      ██   ██      ██      ██ 
+#     ██████   ██████  ███████ ██   ██    ██         ██████ ███████ ██   ██ ███████ ███████ 
+#        ▀▀                                                                                 
+#                                                                                           
+
+
+
+ 
+
+class IFCPropertiesDialog(Ui_QueryProperties, QDockWidget):
+    def __init__(self, iface, parent=None):
+        super().__init__(parent)
+        self.setupUi(self)
+        self.iface = iface
+        self.current_layer = None
+
+        # Inizializza il LED grigio statale
+        self.set_led_color("gray")
+        self.label_led_2.setText(self.tr("Seleziona e connetti"))
+        self.treeWidget.setHeaderLabels([self.tr("Proprietà"), self.tr("Valore"), self.tr("Unità")])
+
+        # Collega l'evento di cambio selezione della ComboBox
+        self.comboBox_MSSQL.currentIndexChanged.connect(self.reset_ui_on_connection_change_MSSQL)
+        self.comboBox_PostgreSQL.currentIndexChanged.connect(self.reset_ui_on_connection_change_PostgreSQL)
+        
+        # Collega i pulsanti alle funzioni di creazione nuova connessione
+        self.pushButton_NuovaConnessioneMSSQL.clicked.connect(self.create_new_connection_MSSQL)
+        self.pushButton_NuovaConnessionePostgreSQL.clicked.connect(self.create_new_connection_PostgreSQL)
+        
+        # Connetti entrambi i database contemporaneamente
+        self.pushButton_ConnettiDB_2.clicked.connect(self.connect_both_databases)
+
+        self.pushButton_SelezionaElemento.clicked.connect(self.activate_selection_tool)
+        self.button_ResetFiltri.clicked.connect(self.reset_properties_ui)
+
+        # Logica per ricerca testuale sulle proprietà in tempo reale
+        self.lineEdit_CercaProprieta.textChanged.connect(self.filter_properties_tree)
+
+
+
+    def set_led_color(self, color_name):
+        palette = self.label_led_2.palette()
+        palette.setColor(self.label_led_2.backgroundRole(), QColor(color_name))
+        self.label_led_2.setAutoFillBackground(True)
+        self.label_led_2.setPalette(palette)
+        self.label_led_2.show()
+
+    def reset_ui_on_connection_change_MSSQL(self):
+        """Resetta il LED e l'etichetta quando la selezione della connessione MSSQL cambia."""
+        self.set_led_color("gray")
+        self.label_led_2.setText(self.tr("Seleziona e connetti"))
+        if hasattr(self, '_mssql_conn_params'):
+            del self._mssql_conn_params
+
+        connection_name = self.comboBox_MSSQL.currentText()
+        if connection_name:
+            s = QSettings()
+            s.beginGroup(f"MSSQL/connections/{connection_name}")
+            host = s.value("host", "N/A")
+            db = s.value("database", "N/A")
+            user = s.value("username")
+            if not user:
+                user = "Trusted Connection"
+            s.endGroup()
+            
+            tooltip_text = (f"<b>Connection:</b> {connection_name}<br>"
+                            f"<b>Host:</b> {host}<br>"
+                            f"<b>Database:</b> {db}<br>"
+                            f"<b>User:</b> {user}")
+            self.comboBox_MSSQL.setToolTip(tooltip_text)
+        else:
+            self.comboBox_MSSQL.setToolTip("")
+
+    def reset_ui_on_connection_change_PostgreSQL(self):
+        """Resetta il LED e l'etichetta quando la selezione della connessione PostgreSQL cambia."""
+        self.set_led_color("gray")
+        self.label_led_2.setText(self.tr("Seleziona e connetti"))
+        if hasattr(self, '_postgresql_conn_params'):
+            del self._postgresql_conn_params
+        
+        connection_name = self.comboBox_PostgreSQL.currentText()
+        if connection_name:
+            s = QSettings()
+            s.beginGroup(f"PostgreSQL/connections/{connection_name}")
+            host = s.value("host", "N/A")
+            db = s.value("database", "N/A")
+            user = s.value("username", "N/A")
+            port = s.value("port", "N/A")
+            s.endGroup()
+            
+            tooltip_text = (f"<b>Connection:</b> {connection_name}<br>"
+                            f"<b>Host:</b> {host}<br>"
+                            f"<b>Database:</b> {db}<br>"
+                            f"<b>User:</b> {user}<br>"
+                            f"<b>Port:</b> {port}")
+            self.comboBox_PostgreSQL.setToolTip(tooltip_text)
+        else:
+            self.comboBox_PostgreSQL.setToolTip("")
+
+    def populate_connection_combo_MSSQL(self):
+        self.comboBox_MSSQL.clear()
+        settings = QSettings() 
+        settings.beginGroup('MSSQL/connections')
+        connections = settings.childGroups()
+        self.comboBox_MSSQL.addItems(connections)
+
+    def populate_connection_combo_PostgreSQL(self):
+        self.comboBox_PostgreSQL.clear()
+        settings = QSettings()
+        settings.beginGroup('PostgreSQL/connections')
+        connections = settings.childGroups()
+        self.comboBox_PostgreSQL.addItems(connections)
+
+    def create_new_connection_MSSQL(self): 
+        self.iface.openDataSourceManagerPage("mssql")    
+        self.close()
+
+    def create_new_connection_PostgreSQL(self): 
+        self.iface.openDataSourceManagerPage("postgres")    
+        self.close()
+    
+    def verify_database_alignment(self):
+        """Verifica l'allineamento confrontando i GUID dei due database target."""
+        guid_direct_mssql = None
+        try:
+            host, db, user, pwd = self._mssql_conn_params
+            conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host};DATABASE={db};TrustServerCertificate=yes;"
+            if user and str(user).strip():
+                conn_str += f"UID={user};PWD={pwd};"
+            else:
+                conn_str += "Trusted_Connection=yes;"
+
+            conn = pyodbc.connect(conn_str, timeout=15)
+            cursor = conn.cursor()
+            query_guid = "SELECT service_broker_guid FROM sys.databases WHERE name = 'ifcSQL'"
+            cursor.execute(query_guid)
+            row = cursor.fetchone()
+            if row:
+                guid_direct_mssql = str(row[0])
+            conn.close()
+
+            if not guid_direct_mssql:
+                return False, self.tr("Impossibile recuperare GUID dal DB MSSQL (ifcSQL).")
+        except Exception as e:
+            return False, self.tr("Errore lettura GUID MSSQL Diretto: {error}").format(error=str(e))
+
+        guid_via_postgres = None
+        try:
+            h_pg, db_pg, u_pg, p_pg, port_pg = self._postgresql_conn_params
+            conn_pg = psycopg2.connect(host=h_pg, database=db_pg, user=u_pg, password=p_pg, port=port_pg)
+            cursor_pg = conn_pg.cursor()
+            query_check = "SELECT db_guid FROM public.mssql_identity_card"
+            cursor_pg.execute(query_check)
+            row_pg = cursor_pg.fetchone()
+            conn_pg.close()
+
+            if row_pg and row_pg[0]:
+                guid_via_postgres = str(row_pg[0])
+            else:
+                return False, self.tr("La tabella 'public.mssql_identity_card' in Postgres è vuota o non accessibile.")
+        except Exception as e:
+            return False, self.tr("Errore leggendo 'mssql_identity_card' da Postgres:\n\n{error}").format(error=str(e))
+
+        if guid_direct_mssql.strip().lower() == guid_via_postgres.strip().lower():
+            return True, self.tr("OK")
+        else:
+            return False, (self.tr("DISALLINEAMENTO DATABASE!\n\n1. GUID MSSQL (QGIS): {guid_ms}\n2. GUID MSSQL (visto da PG): {guid_pg}\n\nPostgreSQL è collegato a un database MSSQL diverso da quello selezionato.").format(guid_ms=guid_direct_mssql, guid_pg=guid_via_postgres))
+
+    def connect_both_databases(self):
+        self.mssql_ready = False
+        self.postgres_ready = False
+        self.connection_errors = []
+
+        self.set_led_color("#ffd700") # Giallo/Oro
+        self.label_led_2.setText(self.tr("Connessione..."))
+        self.pushButton_ConnettiDB_2.setEnabled(False)
+
+        self.connect_selected_DB_MSSQL()
+        self.connect_selected_DB_PostgreSQL()
+
+    def connect_selected_DB_MSSQL(self):
+        selected_connection = self.comboBox_MSSQL.currentText()
+        if hasattr(self, '_mssql_conn_params'): del self._mssql_conn_params
+
+        if not selected_connection:
+            self.on_mssql_error(self.tr("Nessuna connessione MSSQL selezionata"))
+            return
+
+        settings = QSettings()
+        settings.beginGroup(f"MSSQL/connections/{selected_connection}")
+        host = settings.value("host")
+        database = settings.value("database")
+        username = settings.value("username")
+        password = settings.value("password")
+        settings.endGroup()
+
+        if not host or not database:
+            self.on_mssql_error(self.tr("Parametri MSSQL mancanti"))
+            return
+
+        self.ms_thread = MssqlConnectionThread(host, database, username, password)
+        self.ms_thread.success.connect(self.on_mssql_connected)
+        self.ms_thread.error.connect(self.on_mssql_error)
+        self.ms_thread.start()
+
+    def connect_selected_DB_PostgreSQL(self):
+        selected_connection = self.comboBox_PostgreSQL.currentText()
+        if hasattr(self, '_postgresql_conn_params'): del self._postgresql_conn_params
+
+        if not selected_connection:
+            self.on_pg_error(self.tr("Nessuna connessione PostgreSQL selezionata"))
+            return
+
+        settings = QSettings()
+        settings.beginGroup(f"PostgreSQL/connections/{selected_connection}")
+        host = settings.value("host")
+        database = settings.value("database")
+        username = settings.value("username")
+        password = settings.value("password")
+        port = settings.value("port", type=int) 
+        settings.endGroup()
+
+        if not host or not database or not username or port == 0:
+            self.on_pg_error(self.tr("Parametri PostgreSQL mancanti"))
+            return
+
+        self.pg_thread = PostgresConnectionThread(host, database, username, password, port)
+        self.pg_thread.success.connect(self.on_pg_connected)
+        self.pg_thread.error.connect(self.on_pg_error)
+        self.pg_thread.start()
+
+    def on_mssql_connected(self, params):
+        self._mssql_conn_params = params
+        self.mssql_ready = True
+        self.check_if_both_ready()
+
+    def on_mssql_error(self, err_msg):
+        self.connection_errors.append(f"MSSQL: {err_msg}")
+        self.check_if_both_ready()
+
+    def on_pg_connected(self, params):
+        self._postgresql_conn_params = params
+        self.postgres_ready = True
+        self.check_if_both_ready()
+
+    def on_pg_error(self, err_msg):
+        self.connection_errors.append(f"PostgreSQL: {err_msg}")
+        self.check_if_both_ready()
+
+    def check_if_both_ready(self):
+        mssql_finished = self.mssql_ready or any("MSSQL" in e for e in self.connection_errors)
+        pg_finished = self.postgres_ready or any("PostgreSQL" in e for e in self.connection_errors)
+
+        if not (mssql_finished and pg_finished):
+            return
+
+        if self.connection_errors:
+            self.set_led_color("#fa3e3e")
+            self.label_led_2.setText(self.tr("Errore Connessione"))
+            self.pushButton_ConnettiDB_2.setEnabled(True)
+            QMessageBox.critical(self, self.tr("Errore di Connessione"), "\n\n".join(self.connection_errors))
+            return
+
+        try:
+            is_aligned, error_message = self.verify_database_alignment()
+            if is_aligned:
+                self.set_led_color("#90ee90") # Verde
+                self.label_led_2.setText(self.tr("Connessi e Allineati"))
+            else:
+                self.set_led_color("#fa3e3e")
+                self.label_led_2.setText(self.tr("Disallineati!"))
+                QMessageBox.critical(self, self.tr("Disallineamento Database"), error_message)
+                if hasattr(self, '_mssql_conn_params'): del self._mssql_conn_params
+                if hasattr(self, '_postgresql_conn_params'): del self._postgresql_conn_params
+        except Exception as e:
+            self.set_led_color("#fa3e3e")
+            self.label_led_2.setText(self.tr("Errore Script"))
+            QMessageBox.critical(self, self.tr("Errore"), str(e))
+        finally:
+            self.pushButton_ConnettiDB_2.setEnabled(True)
+
+    
+
+
+
+
+
+
+
+    # =========================================================================
+    # STRUMENTO DI SELEZIONE SULLA MAPPA E ESECUZIONE DELLE QUERY
+    # =========================================================================
+
+    def activate_selection_tool(self):
+        """Attiva lo strumento di selezione geometrica sul canvas di QGIS."""
+        if not hasattr(self, '_mssql_conn_params'):
+            QMessageBox.warning(self, self.tr("Database non connesso"), 
+            self.tr("Prima di interrogare la mappa devi connettere i database."))
+            return
+        
+        canvas = self.iface.mapCanvas()
+        self.map_tool = IFCSelectionTool(canvas, self)
+        canvas.setMapTool(self.map_tool)
+    
+        
+        self.iface.mainWindow().statusBar().showMessage(self.tr("Strumento di interrogazione IFC attivo: Clicca su un elemento nella mappa."))
+
+
+    def reset_properties_ui(self):
+        self.lineEdit_CercaProprieta.clear()
+        self.treeWidget.clear()
+
+        # PULIZIA GLOBALE: Rimuove la selezione da TUTTI i layer del progetto
+        for lyr in QgsProject.instance().mapLayers().values():
+            if isinstance(lyr, QgsVectorLayer):
+                try:
+                    lyr.removeSelection()
+                except RuntimeError:
+                    # Gestisce il caso in cui un layer sia stato rimosso ma sia ancora in memoria
+                    pass
+
+        # Resetta il riferimento al layer corrente
+        self.current_layer = None
+
+
+    def closeEvent(self, event):
+        # Svuota l'albero, pulisce la ricerca e deseleziona l'oggetto dalla mappa
+        self.reset_properties_ui()
+        
+        # Consente a Qt di procedere con la chiusura standard del widget
+        super().closeEvent(event)
+    
+    
+    def filter_properties_tree(self, text):
+        text = text.lower()
+        for i in range(self.treeWidget.topLevelItemCount()):
+            top_item = self.treeWidget.topLevelItem(i)
+            top_item_visible = False
+            for j in range(top_item.childCount()):
+                child = top_item.child(j)
+                child_visible = False
+                if child.childCount() > 0:
+                    for k in range(child.childCount()):
+                        sub_child = child.child(k)
+                        if text in sub_child.text(1).lower() or text in sub_child.text(2).lower():
+                            sub_child.setHidden(False); child_visible = True
+                        else: sub_child.setHidden(True)
+                else:
+                    if text in child.text(0).lower() or text in child.text(1).lower() or text in child.text(2).lower():
+                        child_visible = True
+                
+                if child_visible: child.setHidden(False); top_item_visible = True
+                else: child.setHidden(True)
+            
+            if top_item_visible or text in top_item.text(0).lower():
+                top_item.setHidden(False)
+                if text: top_item.setExpanded(True)
+            else: top_item.setHidden(True)
+
+        
+    def execute_report_query(self, target_id, layer=None):
+        """Esegue l'intero blocco di query atomiche e popola l'albero delle proprietà."""
+        # --- GUARDIA ANTI CLICK SECONDO ELEMENTO
+        if getattr(self, "_query_in_corso", False):
+            return
+        self._query_in_corso = True
+        
+        self.current_layer = layer
+
+        # --- CRONOMETRO INIZIALE ---
+        t_inizio = time.time()
+
+        host, db, user, pwd = self._mssql_conn_params
+        conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={host};DATABASE={db};TrustServerCertificate=yes;"
+        
+        if user and str(user).strip():
+            conn_str += f"UID={user};PWD={pwd};"
+        else:
+            conn_str += "Trusted_Connection=yes;"
+            
+        try:
+            conn = pyodbc.connect(conn_str, timeout=15)
+            cursor_main = conn.cursor()
+            cursor_value = conn.cursor()
+            
+            # =================================================================================
+            # FASE 0: VERIFICA E CORREZIONE DELL'ID
+            # =================================================================================
+            t_fase0 = time.time()
+            
+            check_query = """
+                SELECT [Value] FROM [ifcInstance].[EntityAttributeOfString]
+                WHERE GlobalEntityInstanceId = ? AND OrdinalPosition = 1 AND LEN(ISNULL([Value], '')) = 22;
+            """
+            cursor_main.execute(check_query, target_id)
+            if not cursor_main.fetchone():
+                correct_id_query = """
+                    WITH DiagnosticaIniziale AS (
+                        SELECT attr1.GlobalEntityInstanceId AS WrongEntityId, attr3.[Value] AS TrueIfcGlobalId
+                        FROM [ifcInstance].[EntityAttributeOfString] attr1
+                        JOIN [ifcInstance].[EntityAttributeOfString] attr3 ON attr1.GlobalEntityInstanceId = attr3.GlobalEntityInstanceId
+                        WHERE attr1.GlobalEntityInstanceId = ? AND attr1.OrdinalPosition = 1 AND LEN(ISNULL(attr1.[Value], '')) <> 22
+                            AND attr3.OrdinalPosition = 3 AND LEN(ISNULL(attr3.[Value], '')) = 22
+                    ),
+                    MappaProgetto AS (
+                        SELECT d.WrongEntityId, d.TrueIfcGlobalId, assign.ProjectId
+                        FROM DiagnosticaIniziale d
+                        INNER JOIN [ifcProject].[EntityInstanceIdAssignment] assign ON d.WrongEntityId = assign.GlobalEntityInstanceId
+                    ),
+                    RicercaEntitaCorretta AS (
+                        SELECT attr_final.GlobalEntityInstanceId AS CorrectEntityId
+                        FROM MappaProgetto p
+                        INNER JOIN [ifcProject].[EntityInstanceIdAssignment] project_all ON p.ProjectId = project_all.ProjectId
+                        INNER JOIN [ifcInstance].[EntityAttributeOfString] attr_final ON project_all.GlobalEntityInstanceId = attr_final.GlobalEntityInstanceId
+                        WHERE attr_final.OrdinalPosition = 1 AND attr_final.[Value] = p.TrueIfcGlobalId
+                    )
+                    SELECT CorrectEntityId FROM RicercaEntitaCorretta;
+                """
+                cursor_main.execute(correct_id_query, target_id)
+                row_corr = cursor_main.fetchone()
+                if row_corr:
+                    target_id = str(row_corr[0])
+                else:
+                    QMessageBox.critical(self, self.tr("Errore diagnostica"), f"L'ID {target_id} non corrisponde a nessuna entità IFC valida.")
+                    return
+
+            # Pulisce l'albero prima di caricarne uno nuovo
+            self.treeWidget.clear()
+
+            QgsMessageLog.logMessage(f"FASE 0 (Diagnostica) impiega: {time.time() - t_fase0:.3f} secondi", "IFC_Filtro", Qgis.Info)
+
+
+            # =================================================================================
+            # ESTRAZIONE DIZIONARIO UNITÀ TEMPORANEO DALL'OGGETTO CLICCATO
+            # =================================================================================
+            
+            t_unita = time.time()
+            
+            project_id_mssql = None
+            if layer:
+                selected_features = layer.selectedFeatures()
+                if selected_features:
+                    feat = selected_features[0]
+                    idx_pid = layer.fields().indexOf("ProjectNumber_MSSQL")
+                    if idx_pid != -1 and feat.attribute("ProjectNumber_MSSQL") != NULL:
+                        project_id_mssql = feat.attribute("ProjectNumber_MSSQL")
+            
+            if project_id_mssql is None:
+                cursor_main.execute("SELECT ProjectId FROM [ifcProject].[EntityInstanceIdAssignment] WHERE GlobalEntityInstanceId = ?", target_id)
+                row_pid = cursor_main.fetchone()
+                if row_pid:
+                    project_id_mssql = row_pid[0]
+
+            SI_PREFIXES = {"EXA": "E", "PETA": "P", "TERA": "T", "GIGA": "G", "MEGA": "M", "KILO": "k", "HECTO": "h", "DECA": "da", "DECI": "d", "CENTI": "c", "MILLI": "m", "MICRO": "μ", "NANO": "n", "PICO": "p", "FEMTO": "f", "ATTO": "a"}
+            SI_UNITS = {"AMPERE": "A", "BECQUEREL": "Bq", "CANDELA": "cd", "COULOMB": "C", "CUBIC_METRE": "m³", "DEGREE_CELSIUS": "°C", "FARAD": "F", "GRAM": "g", "GRAY": "Gy", "HENRY": "H", "HERTZ": "Hz", "JOULE": "J", "KELVIN": "K", "LUMEN": "lm", "LUX": "lx", "METRE": "m", "MOLE": "mol", "NEWTON": "N", "OHM": "Ω", "PASCAL": "Pa", "RADIAN": "rad", "SECOND": "s", "SIEMENS": "S", "SIEVERT": "Sv", "SQUARE_METRE": "m²", "STERADIAN": "sr", "TESLA": "T", "VOLT": "V", "WATT": "W", "WEBER": "Wb"}
+            CONVERSION_UNITS = {"INCH": "in", "FOOT": "ft", "US SURVEY FOOT": "ft_us", "YARD": "yd", "MILE": "mi", "SQUARE INCH": "in²", "SQUARE FOOT": "ft²", "SQUARE YARD": "yd²", "ACRE": "ac", "SQUARE MILE": "mi²", "CUBIC INCH": "in³", "CUBIC FOOT": "ft³", "CUBIC YARD": "yd³", "LITRE": "L", "LITER": "L", "FLUID OUNCE UK": "fl oz (UK)", "FLUID OUNCE US": "fl oz (US)", "PINT UK": "pt (UK)", "PINT US": "pt (US)", "GALLON UK": "gal (UK)", "GALLON US": "gal (US)", "DEGREE": "°", "OUNCE": "oz", "POUND": "lb", "TON UK": "ton (UK)", "TON US": "ton (US)", "LBF": "lbf", "KIP": "kip", "PSI": "psi", "KSI": "ksi", "MINUTE": "min", "HOUR": "h", "DAY": "d", "BTU": "Btu"}
+
+            def format_exponent_abbr(exponent):
+                if exponent == 1: return ""
+                superscripts = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'}
+                return "".join(superscripts.get(c, c) for c in str(exponent))
+
+            project_units_map = {}
+            if project_id_mssql:
+                query_si_conversion = """
+                    WITH TargetProject AS (
+                        SELECT TOP 1 assignment.GlobalEntityInstanceId FROM [ifcProject].[EntityInstanceIdAssignment] assignment
+                        JOIN [ifcInstance].[Entity] eProject ON assignment.GlobalEntityInstanceId = eProject.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] tProject ON eProject.EntityTypeId = tProject.TypeId AND tProject.ExpressName = 'IfcProject'
+                        WHERE assignment.[ProjectId] = ?
+                    ),
+                    ProjectUnits AS (
+                        SELECT unitRef.Value AS UnitGID FROM TargetProject tp
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] unitsListRef ON unitsListRef.GlobalEntityInstanceId = tp.GlobalEntityInstanceId AND unitsListRef.OrdinalPosition = 9
+                        JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] unitRef ON unitRef.GlobalEntityInstanceId = unitsListRef.Value
+                    )
+                    SELECT 'IfcSIUnit' AS ExpressName, enumUnitType.EnumItemName AS UnitType, enumPrefix.EnumItemName AS Prefix, enumName.EnumItemName AS UnitName FROM ProjectUnits pu
+                    JOIN [ifcInstance].[Entity] eUnit ON pu.UnitGID = eUnit.GlobalEntityInstanceId
+                    JOIN [ifcSchema].[Type] tUnit ON eUnit.EntityTypeId = tUnit.TypeId AND tUnit.ExpressName = 'IfcSIUnit'
+                    JOIN [ifcInstance].[EntityAttributeOfEnum] attrUnitType ON attrUnitType.GlobalEntityInstanceId = pu.UnitGID AND attrUnitType.OrdinalPosition = 2
+                    JOIN [ifcSchema].[EnumItem] enumUnitType ON enumUnitType.TypeId = attrUnitType.TypeId AND enumUnitType.EnumItemId = attrUnitType.Value
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfEnum] attrPrefix ON attrPrefix.GlobalEntityInstanceId = pu.UnitGID AND attrPrefix.OrdinalPosition = 3
+                    LEFT JOIN [ifcSchema].[EnumItem] enumPrefix ON enumPrefix.TypeId = attrPrefix.TypeId AND enumPrefix.EnumItemId = attrPrefix.Value
+                    JOIN [ifcInstance].[EntityAttributeOfEnum] attrName ON attrName.GlobalEntityInstanceId = pu.UnitGID AND attrName.OrdinalPosition = 4
+                    JOIN [ifcSchema].[EnumItem] enumName ON enumName.TypeId = attrName.TypeId AND enumName.EnumItemId = attrName.Value
+                    UNION ALL
+                    SELECT 'IfcConversionBasedUnit' AS ExpressName, enumUnitType.EnumItemName AS UnitType, NULL AS Prefix, attrNameString.Value AS UnitName FROM ProjectUnits pu
+                    JOIN [ifcInstance].[Entity] eUnit ON pu.UnitGID = eUnit.GlobalEntityInstanceId
+                    JOIN [ifcSchema].[Type] tUnit ON eUnit.EntityTypeId = tUnit.TypeId AND tUnit.ExpressName = 'IfcConversionBasedUnit'
+                    JOIN [ifcInstance].[EntityAttributeOfEnum] attrUnitType ON attrUnitType.GlobalEntityInstanceId = pu.UnitGID AND attrUnitType.OrdinalPosition = 2
+                    JOIN [ifcSchema].[EnumItem] enumUnitType ON enumUnitType.TypeId = attrUnitType.TypeId AND enumUnitType.EnumItemId = attrUnitType.Value
+                    JOIN [ifcInstance].[EntityAttributeOfString] attrNameString ON attrNameString.GlobalEntityInstanceId = pu.UnitGID AND attrNameString.OrdinalPosition = 3
+                """
+                cursor_main.execute(query_si_conversion, project_id_mssql)
+                for riga in cursor_main.fetchall():
+                    exp_n, u_type, p_raw, u_name = riga
+                    if exp_n == 'IfcConversionBasedUnit':
+                        abbr = CONVERSION_UNITS.get(u_name.upper(), u_name)
+                    else:
+                        abbr_p = SI_PREFIXES.get(p_raw, "") if p_raw else ""
+                        abbr_u = SI_UNITS.get(u_name.upper(), u_name)
+                        abbr = abbr_p + abbr_u
+                    if u_type: project_units_map[u_type.upper()] = abbr
+
+                query_derived = """
+                    WITH TargetProject AS (
+                        SELECT TOP 1 assignment.GlobalEntityInstanceId FROM [ifcProject].[EntityInstanceIdAssignment] assignment
+                        JOIN [ifcInstance].[Entity] eProject ON assignment.GlobalEntityInstanceId = eProject.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] tProject ON eProject.EntityTypeId = tProject.TypeId AND tProject.ExpressName = 'IfcProject'
+                        WHERE assignment.[ProjectId] = ?
+                    ),
+                    ProjectUnits AS (
+                        SELECT unitRef.Value AS UnitGID FROM TargetProject tp
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] unitsListRef ON unitsListRef.GlobalEntityInstanceId = tp.GlobalEntityInstanceId AND unitsListRef.OrdinalPosition = 9
+                        JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] unitRef ON unitRef.GlobalEntityInstanceId = unitsListRef.Value
+                    ),
+                    DerivedUnits AS (
+                        SELECT pu.UnitGID AS DerivedUnitGID, enumUnitType.EnumItemName AS UnitType FROM ProjectUnits pu
+                        JOIN [ifcInstance].[Entity] eUnit ON pu.UnitGID = eUnit.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] tUnit ON eUnit.EntityTypeId = tUnit.TypeId AND tUnit.ExpressName = 'IfcDerivedUnit'
+                        JOIN [ifcInstance].[EntityAttributeOfEnum] attrUnitType ON attrUnitType.GlobalEntityInstanceId = pu.UnitGID AND attrUnitType.OrdinalPosition = 2
+                        JOIN [ifcSchema].[EnumItem] enumUnitType ON enumUnitType.TypeId = attrUnitType.TypeId AND enumUnitType.EnumItemId = attrUnitType.Value
+                    ),
+                    DerivedElements AS (
+                        SELECT du.DerivedUnitGID, du.UnitType, elemRef.Value AS ElementGID FROM DerivedUnits du
+                        JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] elemRef ON elemRef.GlobalEntityInstanceId = du.DerivedUnitGID
+                    )
+                    SELECT de.DerivedUnitGID, de.UnitType, attrExp.Value AS Exponent, tBase.ExpressName AS BaseUnitExpressName, enumPrefix.EnumItemName AS SIPrefix, enumName.EnumItemName AS SIUnitName, attrNameString.Value AS ConversionUnitName FROM DerivedElements de
+                    JOIN [ifcInstance].[EntityAttributeOfInteger] attrExp ON attrExp.GlobalEntityInstanceId = de.ElementGID AND attrExp.OrdinalPosition = 2
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] attrBaseUnit ON attrBaseUnit.GlobalEntityInstanceId = de.ElementGID AND attrBaseUnit.OrdinalPosition = 1
+                    JOIN [ifcInstance].[Entity] eBase ON attrBaseUnit.Value = eBase.GlobalEntityInstanceId
+                    JOIN [ifcSchema].[Type] tBase ON eBase.EntityTypeId = tBase.TypeId
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfEnum] attrPrefix ON attrPrefix.GlobalEntityInstanceId = attrBaseUnit.Value AND attrPrefix.OrdinalPosition = 3
+                    LEFT JOIN [ifcSchema].[EnumItem] enumPrefix ON enumPrefix.TypeId = attrPrefix.TypeId AND enumPrefix.EnumItemId = attrPrefix.Value
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfEnum] attrName ON attrName.GlobalEntityInstanceId = attrBaseUnit.Value AND attrName.OrdinalPosition = 4
+                    LEFT JOIN [ifcSchema].[EnumItem] enumName ON enumName.TypeId = attrName.TypeId AND enumName.EnumItemId = attrName.Value
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfString] attrNameString ON attrNameString.GlobalEntityInstanceId = attrBaseUnit.Value AND attrNameString.OrdinalPosition = 3
+                """
+                cursor_main.execute(query_derived, project_id_mssql)
+                diz_derivate = {}
+                for riga in cursor_main.fetchall():
+                    d_gid, u_type, exp, b_type, si_pref, si_n, conv_n = riga
+                    si_n = si_n if si_n else ""
+                    conv_n = conv_n if conv_n else ""
+                    if b_type == 'IfcSIUnit':
+                        abbr_pezzo = SI_PREFIXES.get(si_pref, "") + SI_UNITS.get(si_n.upper(), si_n)
+                    else:
+                        abbr_pezzo = CONVERSION_UNITS.get(conv_n.upper(), conv_n)
+                    if d_gid not in diz_derivate:
+                        diz_derivate[d_gid] = {'UnitType': u_type, 'Positivi': [], 'Negativi': []}
+                    if exp > 0: diz_derivate[d_gid]['Positivi'].append(f"{abbr_pezzo}{format_exponent_abbr(exp)}")
+                    elif exp < 0: diz_derivate[d_gid]['Negativi'].append(f"{abbr_pezzo}{format_exponent_abbr(abs(exp))}")
+                
+                for gid, info in diz_derivate.items():
+                    pos = "·".join(info['Positivi'])
+                    neg = "·".join(info['Negativi'])                    
+                    # Se ci sono più unità al denominatore (es. m² e K), le racchiudiamo 
+                    # tra parentesi per evitare qualsiasi ambiguità matematica
+                    denom = f"({neg})" if len(info['Negativi']) > 1 else neg
+                    
+                    if denom:
+                        abbr_completa = f"{pos}/{denom}" if pos else f"1/{denom}"
+                    else:
+                        abbr_completa = pos
+                        
+                    if info['UnitType']: project_units_map[info['UnitType'].upper()] = abbr_completa
+
+            def find_unit_abbr(express_name, units_map):
+                if not express_name or not units_map: return ""
+                name = express_name.upper()
+
+                # Solo le eccezioni dove la regola IFCxxxMEASURE -> xxxUNIT non vale.
+                exceptions = {
+                    'IFCDURATION': 'TIMEUNIT',
+                    'IFCPOSITIVELENGTHMEASURE': 'LENGTHUNIT',
+                    'IFCNONNEGATIVELENGTHMEASURE': 'LENGTHUNIT',
+                    'IFCPOSITIVEPLANEANGLEMEASURE': 'PLANEANGLEUNIT',
+                    'IFCSECTIONALAREAINTEGRALMEASURE': 'SECTIONAREAINTEGRALUNIT',  
+                    'IFCTHERMALCONDUCTIVITYMEASURE': 'THERMALCONDUCTANCEUNIT',     
+                }
+
+                target_type = exceptions.get(name)
+                if target_type is None:
+                    # Regola generale: IFCxxxMEASURE -> xxxUNIT
+                    base = name[3:] if name.startswith('IFC') else name
+                    if base.endswith('MEASURE'):
+                        base = base[:-len('MEASURE')]
+                    target_type = base + 'UNIT'
+
+                return units_map.get(target_type, "")
+
+            QgsMessageLog.logMessage(f"FASE UNITÀ impiega: {time.time() - t_unita:.3f} secondi", "IFC_Filtro", Qgis.Info)
+
+            # =================================================================================
+            # CLASSE E PROGETTO (Recuperati direttamente dal Layer di QGIS)
+            # =================================================================================
+            project_name = self.tr("Non definito")
+            ifc_class = self.tr("Non definito")
+            
+            if layer:
+                # Recupera la feature appena selezionata dallo strumento sulla mappa
+                selected_features = layer.selectedFeatures()
+                if selected_features:
+                    feat = selected_features[0]
+                    
+                    # Estrae i valori controllando che i campi esistano nel layer
+                    idx_proj = layer.fields().indexOf("ProjectName")
+                    idx_class = layer.fields().indexOf("IfcClass")
+                    
+                    if idx_proj != -1 and feat.attribute("ProjectName") != NULL:
+                        project_name = str(feat.attribute("ProjectName"))
+                    if idx_class != -1 and feat.attribute("IfcClass") != NULL:
+                        ifc_class = str(feat.attribute("IfcClass"))
+            
+            # Crea il nodo principale in cima a tutti
+            class_proj_root = QTreeWidgetItem(self.treeWidget, [self.tr("CLASSE E PROGETTO"), "", ""])
+            QTreeWidgetItem(class_proj_root, [self.tr("IFC Class"), ifc_class, ""])
+            QTreeWidgetItem(class_proj_root, [self.tr("Project"), project_name, ""])
+            
+
+
+            # =================================================================================
+            # FASE 1: ATTRIBUTI STANDARD E PREDEFINED TYPE
+            # =================================================================================
+            
+            t_attributi = time.time()
+            
+            attr_root = QTreeWidgetItem(self.treeWidget, [self.tr("ATTRIBUTES"), "", ""])
+
+            if ifc_class == "IfcSpace":
+                # --- PIPELINE PARALLELA: IFCSPACE ---
+                query_string = """
+                    SELECT OrdinalPosition, Value FROM [ifcInstance].[EntityAttributeOfString]
+                    WHERE GlobalEntityInstanceId = ? ORDER BY OrdinalPosition;
+                """
+                cursor_main.execute(query_string, target_id)
+                risultati_string = cursor_main.fetchall()
+                
+                # Mappatura specifica per IfcSpace (Posizione 8 diventa LongName)
+                mappatura_string = {1: "GlobalId", 3: "Name", 5: "ObjectType", 8: "LongName"}
+                
+                if risultati_string:
+                    for row in risultati_string:
+                        nome = mappatura_string.get(row[0], f"Altro (Posizione {row[0]})")
+                        QTreeWidgetItem(attr_root, [nome, str(row[1]), ""])
+
+                # Query Enum per CompositionType (OrdinalPosition = 9)
+                query_enum_9 = """
+                    SELECT ei.EnumItemName FROM [ifcInstance].[EntityAttributeOfEnum] AS eae
+                    INNER JOIN [ifcSchema].[EnumItem] AS ei ON eae.TypeId = ei.TypeId AND eae.Value = ei.EnumItemId
+                    WHERE eae.GlobalEntityInstanceId = ? AND eae.OrdinalPosition = 9;
+                """
+                cursor_main.execute(query_enum_9, target_id)
+                row_enum_9 = cursor_main.fetchone()
+                val_enum_9 = row_enum_9[0] if row_enum_9 else "Non definito"
+                QTreeWidgetItem(attr_root, ["CompositionType", str(val_enum_9), ""])
+
+                # Query Enum per PredefinedType (OrdinalPosition = 10)
+                query_enum_10 = """
+                    SELECT ei.EnumItemName FROM [ifcInstance].[EntityAttributeOfEnum] AS eae
+                    INNER JOIN [ifcSchema].[EnumItem] AS ei ON eae.TypeId = ei.TypeId AND eae.Value = ei.EnumItemId
+                    WHERE eae.GlobalEntityInstanceId = ? AND eae.OrdinalPosition = 10;
+                """
+                cursor_main.execute(query_enum_10, target_id)
+                row_enum_10 = cursor_main.fetchone()
+                val_enum_10 = row_enum_10[0] if row_enum_10 else "Non definito"
+                QTreeWidgetItem(attr_root, ["PredefinedType", str(val_enum_10), ""])
+
+            else:
+                # --- PIPELINE STANDARD: IFCELEMENT ---
+                query_string = """
+                    SELECT OrdinalPosition, Value FROM [ifcInstance].[EntityAttributeOfString]
+                    WHERE GlobalEntityInstanceId = ? ORDER BY OrdinalPosition;
+                """
+                cursor_main.execute(query_string, target_id)
+                risultati_string = cursor_main.fetchall()
+                mappatura_string = {1: "GlobalId", 3: "Name", 5: "ObjectType", 8: "Tag"}
+                
+                if risultati_string:
+                    for row in risultati_string:
+                        nome = mappatura_string.get(row[0], f"Altro (Posizione {row[0]})")
+                        QTreeWidgetItem(attr_root, [nome, str(row[1]), ""])
+
+                query_enum = """
+                    SELECT ei.EnumItemName FROM [ifcInstance].[EntityAttributeOfEnum] AS eae
+                    INNER JOIN [ifcSchema].[EnumItem] AS ei ON eae.TypeId = ei.TypeId AND eae.Value = ei.EnumItemId
+                    WHERE eae.GlobalEntityInstanceId = ? AND eae.OrdinalPosition = 9;
+                """
+                cursor_main.execute(query_enum, target_id)
+                row_enum = cursor_main.fetchone()
+                val_enum = row_enum[0] if row_enum else "Non definito"
+                QTreeWidgetItem(attr_root, ["PredefinedType", str(val_enum), ""])
+
+            QgsMessageLog.logMessage(f"FASE ATTRIBUTI impiega: {time.time() - t_attributi:.3f} secondi", "IFC_Filtro", Qgis.Info)
+            
+            class_proj_root.setExpanded(True)
+            attr_root.setExpanded(True)
+            QApplication.processEvents()
+
+
+            # =================================================================================
+            # FASE 2: STRUTTURA SPAZIALE / LIVELLO
+            # =================================================================================
+            
+            t_spatial = time.time()
+
+            if ifc_class == "IfcSpace":
+                # --- PIPELINE PARALLELA: IFCSPACE (Usa IfcRelAggregates) ---
+                storey_query_space = """
+                    SELECT storeyName.[Value] AS NomeLivello 
+                    FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                    JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAggregates'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] spatialRef ON spatialRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND spatialRef.OrdinalPosition = 5
+                    JOIN [ifcInstance].[Entity] storeyEntity ON storeyEntity.GlobalEntityInstanceId = spatialRef.[Value]
+                    JOIN [ifcSchema].[Type] storeyType ON storeyEntity.EntityTypeId = storeyType.TypeId AND storeyType.ExpressName = 'IfcBuildingStorey'
+                    JOIN [ifcInstance].[EntityAttributeOfString] storeyName ON storeyName.GlobalEntityInstanceId = spatialRef.[Value] AND storeyName.OrdinalPosition = 3
+                    WHERE relListObj.[Value] = ?;
+                """
+                cursor_main.execute(storey_query_space, target_id)
+                livello = cursor_main.fetchone()
+                if livello and livello[0]:
+                    spatial_root = QTreeWidgetItem(self.treeWidget, [self.tr("SPATIAL LOCATION"), "", ""])
+                    QTreeWidgetItem(spatial_root, ["IfcBuildingStorey Name", str(livello[0]), ""])
+
+            else:
+                # --- PIPELINE STANDARD: IFCELEMENT (Usa IfcRelContainedInSpatialStructure) ---
+                storey_query = """
+                    SELECT storeyName.[Value] AS NomeLivello FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                    JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelContainedInSpatialStructure'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] spatialRef ON spatialRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND spatialRef.OrdinalPosition = 6
+                    JOIN [ifcInstance].[Entity] storeyEntity ON storeyEntity.GlobalEntityInstanceId = spatialRef.[Value]
+                    JOIN [ifcSchema].[Type] storeyType ON storeyEntity.EntityTypeId = storeyType.TypeId AND storeyType.ExpressName = 'IfcBuildingStorey'
+                    JOIN [ifcInstance].[EntityAttributeOfString] storeyName ON storeyName.GlobalEntityInstanceId = spatialRef.[Value] AND storeyName.OrdinalPosition = 3
+                    WHERE relListObj.[Value] = ?;
+                """
+                cursor_main.execute(storey_query, target_id)
+                livello = cursor_main.fetchone()
+                if livello and livello[0]:
+                    spatial_root = QTreeWidgetItem(self.treeWidget, [self.tr("SPATIAL LOCATION"), "", ""])
+                    QTreeWidgetItem(spatial_root, ["IfcBuildingStorey Name", str(livello[0]), ""])
+
+            QgsMessageLog.logMessage(f"FASE SPATIALE impiega: {time.time() - t_spatial:.3f} secondi", "IFC_Filtro", Qgis.Info)
+            QApplication.processEvents()
+
+            # =================================================================================
+            # FASE 3: APPARTENENZA A SISTEMI / GRUPPI (uguale per spazi ed elementi)
+            # =================================================================================
+
+            t_sistemi = time.time()
+
+            system_query = """
+                SELECT ISNULL(systemName.[Value], 'Senza Nome') AS NomeSistema, ISNULL(systemType.[Value], 'Senza Tipo') AS TipoSistema
+                FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssignsToGroup'
+                JOIN [ifcInstance].[EntityAttributeOfEntityRef] groupRef ON groupRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND groupRef.OrdinalPosition = 7
+                LEFT JOIN [ifcInstance].[EntityAttributeOfString] systemName ON systemName.GlobalEntityInstanceId = groupRef.[Value] AND systemName.OrdinalPosition = 3
+                LEFT JOIN [ifcInstance].[EntityAttributeOfString] systemType ON systemType.GlobalEntityInstanceId = groupRef.[Value] AND systemType.OrdinalPosition = 5
+                WHERE relListObj.[Value] = ?;
+            """
+            cursor_main.execute(system_query, target_id)
+            sistemi = cursor_main.fetchall()
+
+            if sistemi:
+                sys_root = QTreeWidgetItem(self.treeWidget, [self.tr("SYSTEMS AND GROUPS"), "", ""])
+                for i, sis in enumerate(sistemi, 1):
+                    sys_node = QTreeWidgetItem(sys_root, [f"Group/System {i}", "", ""])
+                    QTreeWidgetItem(sys_node, ["Name", str(sis[0]), ""])
+                    QTreeWidgetItem(sys_node, ["ObjectType", str(sis[1]), ""])
+
+            QgsMessageLog.logMessage(f"FASE SISTEMI impiega: {time.time() - t_sistemi:.3f} secondi", "IFC_Filtro", Qgis.Info)
+            QApplication.processEvents()
+
+            # =================================================================================
+            # FASE 4: MATERIALI ASSOCIATI (non si applica agli spazi)
+            # =================================================================================
+            
+            t_materiali = time.time()
+            
+            if ifc_class != "IfcSpace":
+
+                material_query = """
+                    SELECT matName.Value AS MaterialName, ISNULL(matCat.Value, 'N/D') AS MaterialCategory, CAST(matThick.Value AS VARCHAR) AS Prop, 'IfcMaterialLayerSet' AS Tipo 
+                    FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId 
+                    JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                    JOIN [ifcInstance].[Entity] matSetEntity ON matSetEntity.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcSchema].[Type] matSetType ON matSetEntity.EntityTypeId = matSetType.TypeId AND matSetType.ExpressName = 'IfcMaterialLayerSet'
+                    JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matLayerList ON matLayerList.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matLayerRef ON matLayerRef.GlobalEntityInstanceId = matLayerList.Value AND matLayerRef.OrdinalPosition = 1
+                    JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matLayerRef.Value AND matName.OrdinalPosition = 1 
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matLayerRef.Value AND matCat.OrdinalPosition = 3
+                    JOIN [ifcInstance].[EntityAttributeOfFloat] matThick ON matThick.GlobalEntityInstanceId = matLayerList.Value AND matThick.OrdinalPosition = 2 WHERE relListObj.Value = ?
+                    UNION ALL
+                    SELECT matName.Value AS MaterialName, ISNULL(matCat.Value, 'N/D') AS MaterialCategory, 'N/D' AS Prop, 'IfcMaterialConstituentSet' AS Tipo 
+                    FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId 
+                    JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                    JOIN [ifcInstance].[Entity] matSetEntity ON matSetEntity.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcSchema].[Type] matSetType ON matSetEntity.EntityTypeId = matSetType.TypeId AND matSetType.ExpressName = 'IfcMaterialConstituentSet'
+                    JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matConstList ON matConstList.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matConstRef ON matConstRef.GlobalEntityInstanceId = matConstList.Value AND matConstRef.OrdinalPosition = 3
+                    JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matConstRef.Value AND matName.OrdinalPosition = 1 
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matConstRef.Value AND matCat.OrdinalPosition = 3 WHERE relListObj.Value = ?
+                    UNION ALL
+                    SELECT matName.Value AS MaterialName, ISNULL(matCat.Value, 'N/D') AS MaterialCategory, 'N/D' AS Prop, 'IfcMaterial' AS Tipo 
+                    FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId 
+                    JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                    JOIN [ifcInstance].[Entity] matEntity ON matEntity.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcSchema].[Type] matType ON matEntity.EntityTypeId = matType.TypeId AND matType.ExpressName = 'IfcMaterial'
+                    JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matRef.Value AND matName.OrdinalPosition = 1 
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matRef.Value AND matCat.OrdinalPosition = 3 WHERE relListObj.Value = ?
+                    UNION ALL
+                    SELECT matName.Value AS MaterialName, ISNULL(matCat.Value, 'N/D') AS MaterialCategory, 'N/D' AS Prop, 'IfcMaterialProfileSet' AS Tipo 
+                    FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId 
+                    JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                    JOIN [ifcInstance].[Entity] matSetEntity ON matSetEntity.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcSchema].[Type] matSetType ON matSetEntity.EntityTypeId = matSetType.TypeId AND matSetType.ExpressName = 'IfcMaterialProfileSet'
+                    JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matProfList ON matProfList.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matProfRef ON matProfRef.GlobalEntityInstanceId = matProfList.Value AND matProfRef.OrdinalPosition = 3
+                    JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matProfRef.Value AND matName.OrdinalPosition = 1 
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matProfRef.Value AND matCat.OrdinalPosition = 3 WHERE relListObj.Value = ?
+                    UNION ALL
+                    SELECT matName.Value AS MaterialName, ISNULL(matCat.Value, 'N/D') AS MaterialCategory, 'N/D' AS Prop, 'IfcMaterialList' AS Tipo 
+                    FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId 
+                    JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                    JOIN [ifcInstance].[Entity] matListEntity ON matListEntity.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcSchema].[Type] matListType ON matListEntity.EntityTypeId = matListType.TypeId AND matListType.ExpressName = 'IfcMaterialList'
+                    JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matItemList ON matItemList.GlobalEntityInstanceId = matRef.Value 
+                    JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matItemList.Value AND matName.OrdinalPosition = 1 
+                    LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matItemList.Value AND matCat.OrdinalPosition = 3 WHERE relListObj.Value = ?
+                """
+                cursor_main.execute(material_query, target_id, target_id, target_id, target_id, target_id)
+                materiali = cursor_main.fetchall()
+
+                if materiali:
+                    material_root = QTreeWidgetItem(self.treeWidget, [self.tr("MATERIALS"), "", ""])
+                    for i, mat in enumerate(materiali, start=1):
+                        mat_node = QTreeWidgetItem(material_root, [f"Material {i} ({mat[3]})", "", ""])
+                        QTreeWidgetItem(mat_node, ["Name", str(mat[0]), ""])
+                        QTreeWidgetItem(mat_node, ["Category", str(mat[1]), ""])
+                        if 'LayerSet' in mat[3]: 
+                            QTreeWidgetItem(mat_node, ["LayerThickness", str(mat[2])])
+            
+            QgsMessageLog.logMessage(f"FASE MATERIALI impiega: {time.time() - t_materiali:.3f} secondi", "IFC_Filtro", Qgis.Info)
+            QApplication.processEvents()
+
+            # =================================================================================
+            # FASE 5: PROPERTY SETS (Uguale per spazi ed elementi)
+            # =================================================================================
+
+            t_pset = time.time()
+
+            master_query_pset = """
+                SELECT psetName.Value AS PsetName, propName.Value AS PropName, propRef.Value AS PropID
+                FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relRef
+                JOIN [ifcInstance].[Entity] e ON relRef.GlobalEntityInstanceId = e.GlobalEntityInstanceId
+                JOIN [ifcSchema].[Type] t ON e.EntityTypeId = t.TypeId AND t.ExpressName = 'IfcRelDefinesByProperties'
+                JOIN [ifcInstance].[EntityAttributeOfEntityRef] psetRef ON psetRef.GlobalEntityInstanceId = relRef.GlobalEntityInstanceId AND psetRef.OrdinalPosition = 6
+                JOIN [ifcInstance].[EntityAttributeOfString] psetName ON psetName.GlobalEntityInstanceId = psetRef.Value AND psetName.OrdinalPosition = 3
+                JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] propRef ON propRef.GlobalEntityInstanceId = psetRef.Value AND propRef.OrdinalPosition = 5
+                JOIN [ifcInstance].[EntityAttributeOfString] propName ON propName.GlobalEntityInstanceId = propRef.Value AND propName.OrdinalPosition = 1
+                WHERE relRef.Value = ?;
+            """
+            cursor_main.execute(master_query_pset, target_id)
+            props_pset = cursor_main.fetchall()
+
+            dynamic_value_query_pset = """
+                SET NOCOUNT ON;
+                DECLARE @PropID INT = ?;
+                DECLARE @Result NVARCHAR(MAX) = NULL;
+                DECLARE @ExpressName NVARCHAR(255) = NULL;
+                DECLARE @TableName NVARCHAR(128);
+                DECLARE @DynSQL NVARCHAR(MAX);
+                DECLARE TableCursor CURSOR LOCAL FAST_FORWARD FOR
+                SELECT t.name FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+                INNER JOIN sys.columns c1 ON t.object_id = c1.object_id AND c1.name = 'GlobalEntityInstanceId'
+                INNER JOIN sys.columns c2 ON t.object_id = c2.object_id AND c2.name = 'OrdinalPosition'
+                INNER JOIN sys.columns c3 ON t.object_id = c3.object_id AND c3.name = 'Value' WHERE s.name = 'ifcInstance';
+                OPEN TableCursor; FETCH NEXT FROM TableCursor INTO @TableName;
+                WHILE @@FETCH_STATUS = 0
+                BEGIN
+                    IF @TableName = 'EntityAttributeOfBoolean'
+                    BEGIN
+                        SET @DynSQL = N'SELECT @res = CASE WHEN t.ExpressName = ''IfcBoolean'' AND CAST(attr.Value AS INT) = 1 THEN ''True'' WHEN t.ExpressName = ''IfcBoolean'' AND CAST(attr.Value AS INT) = 0 THEN ''False'' ELSE CAST(attr.Value AS NVARCHAR(MAX)) END, @exp = t.ExpressName FROM [ifcInstance].[' + @TableName + '] attr LEFT JOIN [ifcSchema].[Type] t ON attr.TypeId = t.TypeId WHERE attr.GlobalEntityInstanceId = @pid AND attr.OrdinalPosition = 3;';
+                    END
+                    ELSE
+                    BEGIN
+                        SET @DynSQL = N'SELECT @res = CAST(attr.Value AS NVARCHAR(MAX)), @exp = t.ExpressName FROM [ifcInstance].[' + @TableName + '] attr LEFT JOIN [ifcSchema].[Type] t ON attr.TypeId = t.TypeId WHERE attr.GlobalEntityInstanceId = @pid AND attr.OrdinalPosition = 3;';
+                    END
+                    EXEC sp_executesql @DynSQL, N'@pid INT, @res NVARCHAR(MAX) OUTPUT, @exp NVARCHAR(255) OUTPUT', @pid = @PropID, @res = @Result OUTPUT, @exp = @ExpressName OUTPUT;
+                    IF @Result IS NOT NULL BREAK;
+                    FETCH NEXT FROM TableCursor INTO @TableName;
+                END
+                CLOSE TableCursor; DEALLOCATE TableCursor;
+                SELECT @Result, @ExpressName;
+            """
+
+            if props_pset:  
+                pset_root = QTreeWidgetItem(self.treeWidget, [self.tr("PROPERTY SETS"), "", ""])
+                pset_nodes = {}
+                for riga in props_pset:
+                    pset_name, prop_name, prop_id = riga[0], riga[1], riga[2]
+                    if pset_name not in pset_nodes: pset_nodes[pset_name] = QTreeWidgetItem(pset_root, [pset_name, "", ""])
+                    
+                    cursor_value.execute(dynamic_value_query_pset, prop_id)
+                    valore_row = cursor_value.fetchone()
+                    valore = "Vuoto"
+                    expr_name = None
+                    if valore_row:
+                        valore = valore_row[0] if valore_row[0] is not None else "Vuoto"
+                        expr_name = valore_row[1]
+                    
+                    unita_abbr = find_unit_abbr(expr_name, project_units_map)
+                    QTreeWidgetItem(pset_nodes[pset_name], [prop_name, str(valore), unita_abbr])
+
+            QgsMessageLog.logMessage(f"FASE PSET impiega: {time.time() - t_pset:.3f} secondi", "IFC_Filtro", Qgis.Info)
+            QApplication.processEvents()
+
+            # =================================================================================
+            # FASE 6: QUANTITY TAKE-OFF (QTO) (uguale per spazi ed elementi)
+            # =================================================================================
+
+            t_QTO = time.time()
+
+            master_query_qto = """
+                SELECT psetName.Value AS PsetName, propName.Value AS PropName, propRef.Value AS PropID
+                FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relRef
+                JOIN [ifcInstance].[Entity] e ON relRef.GlobalEntityInstanceId = e.GlobalEntityInstanceId
+                JOIN [ifcSchema].[Type] t ON e.EntityTypeId = t.TypeId AND t.ExpressName = 'IfcRelDefinesByProperties'
+                JOIN [ifcInstance].[EntityAttributeOfEntityRef] psetRef ON psetRef.GlobalEntityInstanceId = relRef.GlobalEntityInstanceId AND psetRef.OrdinalPosition = 6
+                JOIN [ifcInstance].[EntityAttributeOfString] psetName ON psetName.GlobalEntityInstanceId = psetRef.Value AND psetName.OrdinalPosition = 3
+                JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] propRef ON propRef.GlobalEntityInstanceId = psetRef.Value AND propRef.OrdinalPosition = 6
+                JOIN [ifcInstance].[EntityAttributeOfString] propName ON propName.GlobalEntityInstanceId = propRef.Value AND propName.OrdinalPosition = 1
+                WHERE relRef.Value = ?;
+            """
+            cursor_main.execute(master_query_qto, target_id)
+            props_qto = cursor_main.fetchall()
+
+            dynamic_value_query_qto = """
+                SET NOCOUNT ON;
+                DECLARE @PropID INT = ?;
+                DECLARE @Result NVARCHAR(MAX) = NULL;
+                DECLARE @ExpressName NVARCHAR(255) = NULL;
+                DECLARE @TableName NVARCHAR(128);
+                DECLARE @DynSQL NVARCHAR(MAX);
+                DECLARE TableCursor CURSOR LOCAL FAST_FORWARD FOR
+                SELECT t.name FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+                INNER JOIN sys.columns c1 ON t.object_id = c1.object_id AND c1.name = 'GlobalEntityInstanceId'
+                INNER JOIN sys.columns c2 ON t.object_id = c2.object_id AND c2.name = 'OrdinalPosition'
+                INNER JOIN sys.columns c3 ON t.object_id = c3.object_id AND c3.name = 'Value' WHERE s.name = 'ifcInstance';
+                OPEN TableCursor; FETCH NEXT FROM TableCursor INTO @TableName;
+                WHILE @@FETCH_STATUS = 0
+                BEGIN
+                    IF @TableName = 'EntityAttributeOfBoolean'
+                    BEGIN
+                        SET @DynSQL = N'SELECT @res = CASE WHEN t.ExpressName = ''IfcBoolean'' AND CAST(attr.Value AS INT) = 1 THEN ''True'' WHEN t.ExpressName = ''IfcBoolean'' AND CAST(attr.Value AS INT) = 0 THEN ''False'' ELSE CAST(attr.Value AS NVARCHAR(MAX)) END, @exp = t.ExpressName FROM [ifcInstance].[' + @TableName + '] attr LEFT JOIN [ifcSchema].[Type] t ON attr.TypeId = t.TypeId WHERE attr.GlobalEntityInstanceId = @pid AND attr.OrdinalPosition = 4;';
+                    END
+                    ELSE
+                    BEGIN
+                        SET @DynSQL = N'SELECT @res = CAST(attr.Value AS NVARCHAR(MAX)), @exp = t.ExpressName FROM [ifcInstance].[' + @TableName + '] attr LEFT JOIN [ifcSchema].[Type] t ON attr.TypeId = t.TypeId WHERE attr.GlobalEntityInstanceId = @pid AND attr.OrdinalPosition = 4;';
+                    END
+                    EXEC sp_executesql @DynSQL, N'@pid INT, @res NVARCHAR(MAX) OUTPUT, @exp NVARCHAR(255) OUTPUT', @pid = @PropID, @res = @Result OUTPUT, @exp = @ExpressName OUTPUT;
+                    IF @Result IS NOT NULL BREAK;
+                    FETCH NEXT FROM TableCursor INTO @TableName;
+                END
+                CLOSE TableCursor; DEALLOCATE TableCursor;
+                SELECT @Result, @ExpressName;
+            """
+
+            if props_qto:
+                qto_root = QTreeWidgetItem(self.treeWidget, [self.tr("QUANTITY TAKE-OFF"), "", ""])
+                qto_nodes = {}
+                for riga in props_qto:
+                    qto_name, prop_name, prop_id = riga[0], riga[1], riga[2]
+                    if qto_name not in qto_nodes: qto_nodes[qto_name] = QTreeWidgetItem(qto_root, [qto_name, "", ""])
+                    
+                    cursor_value.execute(dynamic_value_query_qto, prop_id)
+                    valore_row = cursor_value.fetchone()
+                    valore = "Vuoto"
+                    expr_name = None
+                    if valore_row:
+                        valore = valore_row[0] if valore_row[0] is not None else "Vuoto"
+                        expr_name = valore_row[1]
+                    
+                    unita_abbr = find_unit_abbr(expr_name, project_units_map)
+                    QTreeWidgetItem(qto_nodes[qto_name], [prop_name, str(valore), unita_abbr])
+
+            QgsMessageLog.logMessage(f"FASE QTO impiega: {time.time() - t_QTO:.3f} secondi", "IFC_Filtro", Qgis.Info)
+            QApplication.processEvents()
+
+            # =================================================================================
+            # MACRO-GRUPPO: INFORMAZIONI DI TIPO (FASI 7, 8, 9 UNITE)
+            # =================================================================================
+            # Creiamo prima il menu principale "TIPO" nell'albero
+            type_main_root = None
+
+            # =================================================================================
+            # FASE 7: ATTRIBUTI DEL TIPO (ELEMENT TYPE) -> Diventa figlio di type_main_root
+            # =================================================================================
+            
+            t_TYPE = time.time()
+
+            type_attributes_query = """
+                SELECT 
+                    typeRef.Value AS ElementTypeId,
+                    typeGlobalId.Value AS TypeGlobalId,
+                    tType.ExpressName AS ClassName,
+                    typeName.Value AS TypeName,
+                    typeTag.Value AS TypeTag,
+                    enumDef.EnumItemName AS PredefinedType
+                FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                JOIN [ifcInstance].[Entity] e ON e.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                JOIN [ifcSchema].[Type] t ON e.EntityTypeId = t.TypeId AND t.ExpressName = 'IfcRelDefinesByType'
+                JOIN [ifcInstance].[EntityAttributeOfEntityRef] typeRef ON typeRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND typeRef.OrdinalPosition = 6
+                JOIN [ifcInstance].[Entity] eType ON eType.GlobalEntityInstanceId = typeRef.Value
+                JOIN [ifcSchema].[Type] tType ON tType.TypeId = eType.EntityTypeId
+                LEFT JOIN [ifcInstance].[EntityAttributeOfString] typeGlobalId ON typeGlobalId.GlobalEntityInstanceId = typeRef.Value AND typeGlobalId.OrdinalPosition = 1
+                LEFT JOIN [ifcInstance].[EntityAttributeOfString] typeName ON typeName.GlobalEntityInstanceId = typeRef.Value AND typeName.OrdinalPosition = 3
+                LEFT JOIN [ifcInstance].[EntityAttributeOfString] typeTag ON typeTag.GlobalEntityInstanceId = typeRef.Value AND typeTag.OrdinalPosition = 8
+                LEFT JOIN [ifcInstance].[EntityAttributeOfEnum] typeEnum ON typeEnum.GlobalEntityInstanceId = typeRef.Value
+                LEFT JOIN [ifcSchema].[EnumItem] enumDef ON enumDef.TypeId = typeEnum.TypeId AND enumDef.EnumItemId = typeEnum.Value
+                WHERE relListObj.Value = ?;
+            """
+            cursor_main.execute(type_attributes_query, target_id)
+            type_attr_row = cursor_main.fetchone()
+            
+            element_type_id = None
+            if type_attr_row:
+                element_type_id = str(type_attr_row[0])
+
+                # Creazione del macro-gruppo
+                if type_main_root is None:
+                    type_main_root = QTreeWidgetItem(self.treeWidget, [self.tr("TYPE"), "", ""])
+
+                type_attr_root = QTreeWidgetItem(type_main_root, [self.tr("TYPE ATTRIBUTES"), "", ""])
+
+                QTreeWidgetItem(type_attr_root, ["GlobalId", str(type_attr_row[1]) if type_attr_row[1] else "Non definito", ""])
+                QTreeWidgetItem(type_attr_root, ["IFC Class", str(type_attr_row[2]), ""])
+                QTreeWidgetItem(type_attr_root, ["Name", str(type_attr_row[3]) if type_attr_row[3] else "Non definito", ""])
+                QTreeWidgetItem(type_attr_root, ["Tag", str(type_attr_row[4]) if type_attr_row[4] else "Non definito", ""])
+                QTreeWidgetItem(type_attr_root, ["PredefinedType", str(type_attr_row[5]) if type_attr_row[5] else "Non definito", ""])
+
+
+            # =================================================================================
+            # FASE 8: PROPERTY SET DI TIPO (TYPE PSET) -> Diventa figlio di type_main_root
+            # =================================================================================
+            
+           
+            if element_type_id:
+                type_master_query_pset = """
+                    SELECT psetName.Value AS PsetName, propName.Value AS PropName, propRef.Value AS PropID FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                    JOIN [ifcInstance].[Entity] e ON relListObj.GlobalEntityInstanceId = e.GlobalEntityInstanceId
+                    JOIN [ifcSchema].[Type] t ON e.EntityTypeId = t.TypeId AND t.ExpressName = 'IfcRelDefinesByType'
+                    JOIN [ifcInstance].[EntityAttributeOfEntityRef] typeRef ON typeRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND typeRef.OrdinalPosition = 6
+                    JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] psetList ON psetList.GlobalEntityInstanceId = typeRef.Value AND psetList.OrdinalPosition = 6
+                    JOIN [ifcInstance].[EntityAttributeOfString] psetName ON psetName.GlobalEntityInstanceId = psetList.Value AND psetName.OrdinalPosition = 3
+                    JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] propRef ON propRef.GlobalEntityInstanceId = psetList.Value AND propRef.OrdinalPosition = 5
+                    JOIN [ifcInstance].[EntityAttributeOfString] propName ON propName.GlobalEntityInstanceId = propRef.Value AND propName.OrdinalPosition = 1
+                    WHERE relListObj.Value = ?;
+                """
+                
+                cursor_main.execute(type_master_query_pset, target_id)
+                type_props_pset = cursor_main.fetchall()
+                
+                if type_props_pset:
+                    if type_main_root is None: type_main_root = QTreeWidgetItem(self.treeWidget, [self.tr("TYPE"), "", ""])
+                    type_pset_root = QTreeWidgetItem(type_main_root, [self.tr("TYPE PROPERTY SETS"), "", ""])
+                    type_pset_nodes = {}
+                    for riga in type_props_pset:
+                        pset_name, prop_name, prop_id = riga[0], riga[1], riga[2]
+                        if pset_name not in type_pset_nodes: type_pset_nodes[pset_name] = QTreeWidgetItem(type_pset_root, [pset_name, "", ""])
+                        
+                        cursor_value.execute(dynamic_value_query_pset, prop_id)
+                        valore_row = cursor_value.fetchone()
+                        valore = "Vuoto"
+                        expr_name = None
+                        if valore_row:
+                            valore = valore_row[0] if valore_row[0] is not None else "Vuoto"
+                            expr_name = valore_row[1]
+                        
+                        unita_abbr = find_unit_abbr(expr_name, project_units_map)
+                        QTreeWidgetItem(type_pset_nodes[pset_name], [prop_name, str(valore), unita_abbr])
+            
+
+            # =================================================================================
+            # FASE 9: MATERIALI DEL TIPO (TYPE MATERIALS) -> Diventa figlio di type_main_root
+            # =================================================================================
+            if ifc_class != "IfcSpace":
+                
+                if element_type_id:
+                    type_material_query = """
+                        -- CASO 1: IfcMaterialLayerSet
+                        SELECT 
+                            matName.Value AS MaterialName,
+                            ISNULL(matCat.Value, 'N/D') AS MaterialCategory,
+                            CAST(matThick.Value AS VARCHAR) AS ProprietaAggiuntiva,
+                            'IfcMaterialLayerSet' AS TipoAssegnazione
+                        FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                        JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                        JOIN [ifcInstance].[Entity] matSetEntity ON matSetEntity.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcSchema].[Type] matSetType ON matSetEntity.EntityTypeId = matSetType.TypeId AND matSetType.ExpressName = 'IfcMaterialLayerSet'
+                        JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matLayerList ON matLayerList.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matLayerRef ON matLayerRef.GlobalEntityInstanceId = matLayerList.Value AND matLayerRef.OrdinalPosition = 1
+                        JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matLayerRef.Value AND matName.OrdinalPosition = 1
+                        LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matLayerRef.Value AND matCat.OrdinalPosition = 3
+                        JOIN [ifcInstance].[EntityAttributeOfFloat] matThick ON matThick.GlobalEntityInstanceId = matLayerList.Value AND matThick.OrdinalPosition = 2
+                        WHERE relListObj.Value = ?
+
+                        UNION ALL
+
+                        -- CASO 2: IfcMaterialConstituentSet
+                        SELECT 
+                            matName.Value AS MaterialName,
+                            ISNULL(matCat.Value, 'N/D') AS MaterialCategory,
+                            'N/D' AS ProprietaAggiuntiva,
+                            'IfcMaterialConstituentSet' AS TipoAssegnazione
+                        FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                        JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                        JOIN [ifcInstance].[Entity] matSetEntity ON matSetEntity.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcSchema].[Type] matSetType ON matSetEntity.EntityTypeId = matSetType.TypeId AND matSetType.ExpressName = 'IfcMaterialConstituentSet'
+                        JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matConstList ON matConstList.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matConstRef ON matConstRef.GlobalEntityInstanceId = matConstList.Value AND matConstRef.OrdinalPosition = 3
+                        JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matConstRef.Value AND matName.OrdinalPosition = 1
+                        LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matConstRef.Value AND matCat.OrdinalPosition = 3
+                        WHERE relListObj.Value = ?
+
+                        UNION ALL
+
+                        -- CASO 3: IfcMaterial
+                        SELECT 
+                            matName.Value AS MaterialName,
+                            ISNULL(matCat.Value, 'N/D') AS MaterialCategory,
+                            'N/D' AS ProprietaAggiuntiva,
+                            'IfcMaterial' AS TipoAssegnazione
+                        FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                        JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                        JOIN [ifcInstance].[Entity] matEntity ON matEntity.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcSchema].[Type] matType ON matEntity.EntityTypeId = matType.TypeId AND matType.ExpressName = 'IfcMaterial'
+                        JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matRef.Value AND matName.OrdinalPosition = 1
+                        LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matRef.Value AND matCat.OrdinalPosition = 3
+                        WHERE relListObj.Value = ?
+
+                        UNION ALL
+
+                        -- CASO 4: IfcMaterialProfileSet
+                        SELECT 
+                            matName.Value AS MaterialName,
+                            ISNULL(matCat.Value, 'N/D') AS MaterialCategory,
+                            'N/D' AS ProprietaAggiuntiva,
+                            'IfcMaterialProfileSet' AS TipoAssegnazione
+                        FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                        JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                        JOIN [ifcInstance].[Entity] matSetEntity ON matSetEntity.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcSchema].[Type] matSetType ON matSetEntity.EntityTypeId = matSetType.TypeId AND matSetType.ExpressName = 'IfcMaterialProfileSet'
+                        JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matProfList ON matProfList.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matProfRef ON matProfRef.GlobalEntityInstanceId = matProfList.Value AND matProfRef.OrdinalPosition = 3
+                        JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matProfRef.Value AND matName.OrdinalPosition = 1
+                        LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matProfRef.Value AND matCat.OrdinalPosition = 3
+                        WHERE relListObj.Value = ?
+
+                        UNION ALL
+
+                        -- CASO 5: IfcMaterialList
+                        SELECT 
+                            matName.Value AS MaterialName,
+                            ISNULL(matCat.Value, 'N/D') AS MaterialCategory,
+                            'N/D' AS ProprietaAggiuntiva,
+                            'IfcMaterialList' AS TipoAssegnazione
+                        FROM [ifcInstance].[EntityAttributeListElementOfEntityRef] relListObj
+                        JOIN [ifcInstance].[Entity] relEntity ON relEntity.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId
+                        JOIN [ifcSchema].[Type] relType ON relEntity.EntityTypeId = relType.TypeId AND relType.ExpressName = 'IfcRelAssociatesMaterial'
+                        JOIN [ifcInstance].[EntityAttributeOfEntityRef] matRef ON matRef.GlobalEntityInstanceId = relListObj.GlobalEntityInstanceId AND matRef.OrdinalPosition = 6
+                        JOIN [ifcInstance].[Entity] matListEntity ON matListEntity.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcSchema].[Type] matListType ON matListEntity.EntityTypeId = matListType.TypeId AND matListType.ExpressName = 'IfcMaterialList'
+                        JOIN [ifcInstance].[EntityAttributeListElementOfEntityRef] matItemList ON matItemList.GlobalEntityInstanceId = matRef.Value
+                        JOIN [ifcInstance].[EntityAttributeOfString] matName ON matName.GlobalEntityInstanceId = matItemList.Value AND matName.OrdinalPosition = 1
+                        LEFT JOIN [ifcInstance].[EntityAttributeOfString] matCat ON matCat.GlobalEntityInstanceId = matItemList.Value AND matCat.OrdinalPosition = 3
+                        WHERE relListObj.Value = ?;
+                    """
+                    cursor_main.execute(type_material_query, element_type_id, element_type_id, element_type_id, element_type_id, element_type_id)
+                    type_materiali_trovati = cursor_main.fetchall()
+                    
+                    if type_materiali_trovati:
+                        if type_main_root is None:
+                            type_main_root = QTreeWidgetItem(self.treeWidget, [self.tr("TYPE"), "", ""])
+                        
+                        type_material_root = QTreeWidgetItem(type_main_root, [self.tr("TYPE MATERIALS"), "", ""])
+                        for i, mat in enumerate(type_materiali_trovati, start=1):
+                            mat_node = QTreeWidgetItem(type_material_root, [f"Material {i} ({mat[3]})", "", ""])
+                            QTreeWidgetItem(mat_node, ["Name", str(mat[0]), ""])
+                            QTreeWidgetItem(mat_node, ["Category", str(mat[1]), ""])
+                            if 'LayerSet' in mat[3]: 
+                                QTreeWidgetItem(mat_node, ["LayerThickness", str(mat[2])])
+
+            QgsMessageLog.logMessage(f"FASE TYPE impiega: {time.time() - t_TYPE:.3f} secondi", "IFC_Filtro", Qgis.Info)
+            QgsMessageLog.logMessage(f"=== TEMPO TOTALE INTERROGAZIONE: {time.time() - t_inizio:.3f} secondi ===", "IFC_Filtro", Qgis.Info)
+            QApplication.processEvents()
+
+            header = self.treeWidget.header()
+            # DISATTIVA il vincolo di Qt che costringe l'ultima colonna a riempire il pannello
+            header.setStretchLastSection(False)
+
+            # (Proprietà): Prende solo lo spazio che serve al testo
+            header.setSectionResizeMode(1, QHeaderView.Stretch) 
+            # (Valore): Si allunga/stringe dinamicamente occupando tutto lo spazio rimasto
+            header.setSectionResizeMode(0, QHeaderView.Stretch)          
+            # (Unità): Prende lo spazio necessario e resta agganciata al bordo destro
+            header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+
+            conn.close()
+            
+        except Exception as e:
+            # Sblocca il cursore se era rimasto in attesa
+            QApplication.restoreOverrideCursor()
+            
+            # Costruisce il messaggio dettagliato per l'utente
+            msg_errore = self.tr(
+                "Errore durante l'interrogazione dell'oggetto:\n{error}\n\n"
+                "ATTENZIONE: L'operazione è stata interrotta. I dati caricati finora "
+                "nell'albero potrebbero essere incompleti o parziali."
+            ).format(error=str(e))
+
+            QMessageBox.critical(self, self.tr("Errore Database"), msg_errore)
+        finally:
+            self._query_in_corso = False
+            
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#class per la gestione della selezione degli elementi sulla mappa 
+
+class IFCSelectionTool(QgsMapTool):
+    def __init__(self, canvas, dialog):
+        super().__init__(canvas)
+        self.canvas = canvas
+        self.dialog = dialog
+        self.setCursor(Qt.CrossCursor) # Cursore a mirino
+
+    def canvasReleaseEvent(self, event):
+        layer = self.canvas.currentLayer()
+        if not layer or not isinstance(layer, QgsVectorLayer):
+            QMessageBox.warning(self.canvas.window(), self.tr("Attenzione"), 
+                                self.tr("Seleziona un layer vettoriale valido nel pannello dei layer prima di cliccare."))
+            self.canvas.unsetMapTool(self) 
+            return
+
+        # Trasforma il clic in coordinate mappa
+        point = self.toMapCoordinates(event.pos())
+        
+        # Area di tolleranza iniziale (5 pixel attorno al clic)
+        search_radius = self.canvas.mapUnitsPerPixel() * 5
+        search_rect = QgsRectangle(
+            point.x() - search_radius, point.y() - search_radius,
+            point.x() + search_radius, point.y() + search_radius
+        )
+        
+        # 1. Recupera i candidati i cui Bounding Box intersecano il clic
+        request = QgsFeatureRequest().setFilterRect(search_rect)
+        features = list(layer.getFeatures(request))
+        
+        # Se non trova nessuna feature nel rettangolo di ricerca, avvisa l'utente
+        if not features:
+            QMessageBox.warning(self.canvas.window(), self.tr("Selezione vuota"), 
+                                self.tr("Nessun elemento trovato nel punto cliccato.\n\nClicca su un oggetto IFC valido o cambia il layer di selezione."))
+            self.canvas.unsetMapTool(self)
+            return
+        
+        # 2. STRATEGIA DI SELEZIONE CHIRURGICA:
+        # Creiamo un punto geometrico reale dal clic dell'utente
+        click_geom = QgsGeometry.fromPointXY(point)
+        
+        target_feature = None
+        min_distance = float('inf')
+        
+        # Cicliamo tra gli elementi vicini per trovare quello geometricamente più vicino
+        for feature in features:
+            if not feature.hasGeometry():
+                continue
+            
+            # Calcola la distanza reale tra il clic e la geometria (muro, porta, pilastro, ecc.)
+            dist = feature.geometry().distance(click_geom)
+            
+            if dist < min_distance:
+                min_distance = dist
+                target_feature = feature
+        
+        # Se l'elemento più vicino è comunque fuori dalla tolleranza dei 5 pixel, avvisa l'utente
+        if target_feature is None or min_distance > search_radius:
+            QMessageBox.warning(self.canvas.window(), self.tr("Selezione non valida"), 
+                                self.tr("Il punto cliccato è troppo lontano dagli oggetti del layer.\n\nAvvicinati ad un elemento valido."))
+            self.canvas.unsetMapTool(self)
+            return
+
+        
+        # SELEZIONE E REPAINT IMMEDIATO
+        
+        # PULIZIA GLOBALE: Rimuove la selezione da TUTTI i layer del progetto
+        for lyr in QgsProject.instance().mapLayers().values():
+            if isinstance(lyr, QgsVectorLayer):
+                lyr.removeSelection()
+
+        # Selezioniamo subito l'elemento e forziamo la GUI a processare l'evento grafico.
+        # In questo modo si colorerà di giallo ISTANTANEAMENTE, anche se le query successive falliscono.
+        layer.selectByIds([target_feature.id()])
+        layer.triggerRepaint()
+        QApplication.processEvents() 
+
+        # 3. Controllo colonna sull'elemento più vicino isolato
+        attr_idx = layer.fields().indexOf("GlobalId_MSSQL")
+        if attr_idx == -1:
+            QMessageBox.warning(self.canvas.window(), self.tr("Errore Layer"), 
+                                self.tr("La colonna 'GlobalId_MSSQL' non è presente in questo layer."))
+            self.canvas.unsetMapTool(self)
+            return
+            
+        target_id = target_feature.attribute("GlobalId_MSSQL")
+        if target_id is None or target_id == NULL or str(target_id).strip() == "":
+            QMessageBox.warning(self.canvas.window(), self.tr("Valore mancante"), 
+                                self.tr("L'elemento selezionato non ha un ID valido nella colonna 'GlobalId_MSSQL'."))
+            self.canvas.unsetMapTool(self)
+            return
+            
+        # Rimuove lo strumento dal canvas (scatta deactivate())
+        self.canvas.unsetMapTool(self)
+        
+        # Avvia l'interrogazione nel database in sicurezza
+        try:
+            if self.dialog:
+                self.dialog.execute_report_query(str(target_id), layer)
+        except RuntimeError:
+            pass 
+
+    def deactivate(self):
+        """Metodo nativo di QGIS: si attiva quando il tool viene rimosso."""
+        try:
+            if self.dialog:
+                self.dialog.show()
+        except RuntimeError:
+            pass
+        super().deactivate()
