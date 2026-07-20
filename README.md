@@ -102,6 +102,17 @@ Once the data has been imported (MSSQL + PostgreSQL), you can easily view your I
 <br><br> ![GIF 3Dmapview](github_images/11_3Dmapview.gif) <br><br>
 
 
+# 🎓 Paper & Citation
+
+Even if the workflow has been enhanced, particularly simplifying geometry conversion, you can read the original paper to see how it all started:
+
+- **IFC and QGIS integration for the Integrated Water Service Management**  
+  Michele Berlato, Giorgio Agugiaro, Ken Arroyo Ohori, Carlo Zanchetta  
+  *ISPRS Annals of the Photogrammetry, Remote Sensing and Spatial Information Sciences*, Vol. XI-4-2026, pp. 13–20, 2026.  
+  🔗 **DOI:** [10.5194/isprs-annals-XI-4-2026-13-2026](https://doi.org/10.5194/isprs-annals-XI-4-2026-13-2026)
+
+
+
 # 📁 Folders Contents
 
 - first_installation = folder containing the files needed to install and set up the plugin;
